@@ -1,0 +1,31 @@
+---
+const features = [
+  { feature: 'Storage Engine', redis: 'Redis 7.0+', postgres: 'PostgreSQL 15+' },
+  { feature: 'Atomicity', redis: 'Lua scripts', postgres: 'SQL transactions' },
+  { feature: 'Dequeue Strategy', redis: 'ZPOPMIN / sorted sets', postgres: 'SELECT FOR UPDATE SKIP LOCKED' },
+  { feature: 'Persistence', redis: 'RDB + AOF (configurable)', postgres: 'WAL (always durable)' },
+  { feature: 'Horizontal Scaling', redis: 'Redis Cluster', postgres: 'Read replicas, Citus' },
+  { feature: 'Real-time Notifications', redis: 'Pub/Sub', postgres: 'LISTEN/NOTIFY' },
+  { feature: 'Conformance Level', redis: 'Level 4', postgres: 'Level 4' },
+  { feature: 'Best For', redis: 'High throughput, low latency', postgres: 'Durability, existing Postgres infra' },
+];
+---
+
+<table class="backend-table">
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th>Redis Backend</th>
+      <th>PostgreSQL Backend</th>
+    </tr>
+  </thead>
+  <tbody>
+    {features.map((row) => (
+      <tr>
+        <td><strong>{row.feature}</strong></td>
+        <td>{row.redis}</td>
+        <td>{row.postgres}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

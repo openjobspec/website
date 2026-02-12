@@ -1,0 +1,53 @@
+---
+const sdks = [
+  {
+    language: 'Go',
+    pkg: 'go get github.com/openjobspec/ojs-go-sdk',
+    repo: 'https://github.com/openjobspec/ojs-go-sdk',
+    note: 'Full client + worker, middleware, workflows',
+  },
+  {
+    language: 'JavaScript / TypeScript',
+    pkg: 'pnpm add @openjobspec/sdk',
+    repo: 'https://github.com/openjobspec/ojs-js-sdk',
+    note: 'ESM, vitest tested, full type definitions',
+  },
+  {
+    language: 'Python',
+    pkg: 'pip install openjobspec',
+    repo: 'https://github.com/openjobspec/ojs-python-sdk',
+    note: 'asyncio, mypy strict, Python 3.11+',
+  },
+  {
+    language: 'Java',
+    pkg: 'Maven: com.openjobspec:ojs-sdk',
+    repo: 'https://github.com/openjobspec/ojs-java-sdk',
+    note: 'Java 21 records, zero required dependencies',
+  },
+  {
+    language: 'Rust',
+    pkg: 'cargo add openjobspec',
+    repo: 'https://github.com/openjobspec/ojs-rust-sdk',
+    note: 'tokio async, serde, full type safety',
+  },
+  {
+    language: 'Ruby',
+    pkg: "gem 'openjobspec'",
+    repo: 'https://github.com/openjobspec/ojs-ruby-sdk',
+    note: 'stdlib only, Ruby 3.2+',
+  },
+];
+---
+
+<div class="language-grid">
+  {sdks.map((sdk) => (
+    <div class="language-card">
+      <h4>{sdk.language}</h4>
+      <code>{sdk.pkg}</code>
+      <p>{sdk.note}</p>
+      <p style="margin-top: 0.5rem;">
+        <a href={sdk.repo}>GitHub &rarr;</a>
+      </p>
+    </div>
+  ))}
+</div>
