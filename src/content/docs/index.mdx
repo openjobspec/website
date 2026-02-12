@@ -1,0 +1,95 @@
+---
+title: Open Job Spec
+description: A universal, language-agnostic standard for background job processing.
+template: splash
+hero:
+  title: One standard for background jobs. Every language. Every backend.
+  tagline: Open Job Spec (OJS) defines a vendor-neutral envelope format, 8-state lifecycle, and protocol bindings for background job processing. Write jobs in any language, run them on any backend.
+  actions:
+    - text: Get Started
+      link: /getting-started/quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: Read the Spec
+      link: /spec/core/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/openjobspec/openjobspec
+      icon: external
+      variant: minimal
+---
+
+import LanguageGrid from '../../components/LanguageGrid.astro';
+import BackendComparison from '../../components/BackendComparison.astro';
+
+## Enqueue in JavaScript, process in Go
+
+OJS jobs are plain JSON. Any language can produce them, any language can consume them. The server handles retry logic, scheduling, and state management so your clients stay thin.
+
+```js
+// JavaScript: enqueue a job
+import { OJSClient } from '@openjobspec/sdk';
+
+const client = new OJSClient({ url: 'http://localhost:8080' });
+await client.enqueue('email.send', ['user@example.com', 'welcome']);
+```
+
+```go
+// Go: process the same job
+worker := ojs.NewWorker(ojs.WorkerConfig{
+    URL:    "http://localhost:8080",
+    Queues: []string{"default"},
+})
+
+worker.Handle("email.send", func(ctx ojs.JobContext) error {
+    to := ctx.Args[0].(string)
+    template := ctx.Args[1].(string)
+    return sendEmail(to, template)
+})
+
+worker.Start(context.Background())
+```
+
+---
+
+## Why OJS?
+
+<div class="card-grid">
+  <div class="card">
+    <h3>Backend-agnostic</h3>
+    <p>Write your job logic once, run it on Redis, PostgreSQL, or any conforming backend. Switch backends without changing application code.</p>
+  </div>
+  <div class="card">
+    <h3>Language-agnostic</h3>
+    <p>A Python service can enqueue a job that a Go worker processes. Six official SDKs cover the most popular languages, and the spec is simple enough to implement in a weekend.</p>
+  </div>
+  <div class="card">
+    <h3>Battle-tested design</h3>
+    <p>OJS synthesizes the best ideas from Sidekiq, Faktory, Oban, BullMQ, Celery, and Temporal. Every design choice is documented with rationale and prior art.</p>
+  </div>
+</div>
+
+---
+
+## SDKs for every language
+
+<LanguageGrid />
+
+---
+
+## Choose your backend
+
+Both official backends support all five conformance levels and are production-ready.
+
+<BackendComparison />
+
+---
+
+<div class="cta-section">
+  <h2>Get running in 5 minutes</h2>
+  <p>One Docker Compose command, one SDK install, and you have a working job system.</p>
+  <div class="cta-buttons">
+    <a href="/getting-started/quickstart/" class="cta-primary">Quickstart Guide</a>
+    <a href="/spec/core/" class="cta-secondary">Read the Spec</a>
+  </div>
+</div>
