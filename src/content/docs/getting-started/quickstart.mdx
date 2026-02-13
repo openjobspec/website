@@ -1,0 +1,170 @@
+---
+title: Quickstart
+description: Get a working OJS job system running in 5 minutes.
+---
+
+This guide gets you from zero to a working background job system in five steps. You will start an OJS server, enqueue a job from JavaScript, and process it with a worker.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [Node.js](https://nodejs.org/) 18 or later
+- [pnpm](https://pnpm.io/) (or npm/yarn)
+
+## Step 1: Start the OJS server
+
+Create a `docker-compose.yml` file:
+
+```yaml
+# docker-compose.yml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+```
+
+Start it:
+
+```bash
+docker compose up -d
+```
+
+Verify the server is healthy:
+
+```bash
+curl http://localhost:8080/ojs/v1/health
+```
+
+You should see `{"status":"ok"}` in the response.
+
+## Step 2: Install the SDK
+
+```bash
+mkdir ojs-demo && cd ojs-demo
+pnpm init
+pnpm add @openjobspec/sdk
+```
+
+## Step 3: Enqueue a job
+
+Create `enqueue.mjs`:
+
+```js
+// enqueue.mjs
+import { OJSClient } from '@openjobspec/sdk';
+
+const client = new OJSClient({ url: 'http://localhost:8080' });
+
+const job = await client.enqueue('email.send', [
+  'user@example.com',
+  'welcome',
+]);
+
+console.log(`Enqueued job ${job.id} in state: ${job.state}`);
+```
+
+Run it:
+
+```bash
+node enqueue.mjs
+```
+
+You should see output like:
+
+```
+Enqueued job 019461a8-1a2b-7c3d-8e4f-5a6b7c8d9e0f in state: available
+```
+
+## Step 4: Start a worker
+
+Create `worker.mjs`:
+
+```js
+// worker.mjs
+import { OJSWorker } from '@openjobspec/sdk';
+
+const worker = new OJSWorker({
+  url: 'http://localhost:8080',
+  queues: ['default'],
+  concurrency: 5,
+});
+
+worker.handle('email.send', async (ctx) => {
+  const [to, template] = ctx.args;
+  console.log(`Sending "${template}" email to ${to}`);
+
+  // Your email logic goes here.
+  // For now, just simulate some work.
+  await new Promise((r) => setTimeout(r, 500));
+
+  return { delivered: true };
+});
+
+// Graceful shutdown on Ctrl+C
+process.on('SIGINT', () => worker.stop());
+process.on('SIGTERM', () => worker.stop());
+
+await worker.start();
+console.log('Worker started, waiting for jobs...');
+```
+
+Run the worker:
+
+```bash
+node worker.mjs
+```
+
+You should see:
+
+```
+Worker started, waiting for jobs...
+Sending "welcome" email to user@example.com
+```
+
+## Step 5: Check the job status
+
+In a separate terminal, check the job:
+
+```bash
+curl http://localhost:8080/ojs/v1/jobs/<job-id>
+```
+
+Replace `<job-id>` with the ID printed in Step 3. The response shows the completed job with its result:
+
+```json
+{
+  "job": {
+    "id": "019461a8-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "type": "email.send",
+    "state": "completed",
+    "attempt": 1,
+    "result": { "delivered": true }
+  }
+}
+```
+
+## What just happened?
+
+1. The **OJS server** (Redis backend) started and connected to Redis.
+2. Your **client** sent a `POST /ojs/v1/jobs` request with the job envelope. The server assigned a UUIDv7 ID, set the state to `available`, and stored the job in Redis.
+3. Your **worker** polled `POST /ojs/v1/workers/fetch`, claimed the job (state changed to `active`), and ran your handler.
+4. The handler succeeded, so the worker sent `POST /ojs/v1/workers/ack`. The server set the state to `completed` and stored the result.
+
+All retry logic, scheduling, and state management happened server-side. Your client and worker code stayed simple.
+
+## Next steps
+
+- Read [Core Concepts](/getting-started/concepts/) to understand the job envelope, lifecycle states, and operations.
+- Explore [SDKs](/ecosystem/sdks/) for Go, Python, Java, Rust, and Ruby.
+- Try the [PostgreSQL backend](/ecosystem/backends/) if you prefer SQL over Redis.
+- Add [retry policies](/spec/retry/), [scheduled jobs](/spec/scheduling/), or [workflows](/spec/workflows/) to your jobs.

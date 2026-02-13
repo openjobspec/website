@@ -1,0 +1,215 @@
+---
+title: Core Concepts
+description: Understand the job envelope, 8-state lifecycle, operations, queues, and workers.
+---
+
+This page explains the fundamental concepts in Open Job Spec. Understanding these concepts will help you work with any OJS SDK or backend.
+
+## The job envelope
+
+Every job in OJS is represented by a **job envelope**: a JSON object that carries everything needed to identify, route, execute, and track a background job.
+
+```json
+{
+  "specversion": "1.0.0-rc.1",
+  "id": "019461a8-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+  "type": "email.send",
+  "queue": "default",
+  "args": ["user@example.com", "welcome"]
+}
+```
+
+The envelope has three categories of attributes:
+
+| Category | Who sets it | Examples |
+|----------|-------------|---------|
+| **Required** | Client provides | `type`, `args`, `queue` |
+| **Optional** | Client may provide | `priority`, `timeout`, `retry`, `scheduled_at` |
+| **System-managed** | Server sets and maintains | `id`, `state`, `attempt`, `created_at` |
+
+**Key design choice**: Job arguments (`args`) are always a JSON array of simple types (strings, numbers, booleans, nulls, arrays, objects). No serialized objects, no language-specific types. This constraint, proven by Sidekiq over a decade of production use, forces clean separation between job data and application state, and enables cross-language interoperability.
+
+## The 8-state lifecycle
+
+Every job progresses through a well-defined set of states. The server enforces valid transitions and rejects invalid ones.
+
+```
+                                PUSH (enqueue)
+                                     |
+                  +------------------+------------------+
+                  |                  |                  |
+                  v                  v                  v
+            [scheduled]        [available]          [pending]
+                  |                  |                  |
+                  | time arrives     |                  | external
+                  +-------->--------+<---------<-------+ activation
+                                    |
+                                    | worker claims (FETCH)
+                                    v
+                               [active]
+                                    |
+                  +--------+--------+--------+---------+
+                  |        |                 |         |
+                  v        v                 v         v
+           [completed] [retryable]     [cancelled] [discarded]
+                           |                          |
+                           | backoff expires           | manual retry
+                           +-------> [available] <----+
+```
+
+### State descriptions
+
+| State | Description | Terminal? |
+|-------|-------------|-----------|
+| `scheduled` | Waiting for its `scheduled_at` time to arrive | No |
+| `available` | Ready to be picked up by a worker | No |
+| `pending` | Staged and waiting for external activation | No |
+| `active` | Currently being executed by a worker | No |
+| `completed` | Handler succeeded. Done. | Yes |
+| `retryable` | Handler failed, but retries remain. Will be retried after backoff. | No |
+| `cancelled` | Intentionally stopped via CANCEL | Yes |
+| `discarded` | Permanently failed (retries exhausted). In the dead letter queue. | Yes |
+
+Terminal states are permanent. Once a job is `completed`, `cancelled`, or `discarded`, it stays that way.
+
+## Logical operations
+
+OJS defines seven abstract operations. These are protocol-agnostic and describe *what* can be done, not *how*. The HTTP binding maps each operation to specific endpoints.
+
+| Operation | Purpose | HTTP Mapping |
+|-----------|---------|-------------|
+| **PUSH** | Enqueue a job | `POST /ojs/v1/jobs` |
+| **FETCH** | Claim a job for processing | `POST /ojs/v1/workers/fetch` |
+| **ACK** | Report success | `POST /ojs/v1/workers/ack` |
+| **FAIL** | Report failure with structured error | `POST /ojs/v1/workers/nack` |
+| **BEAT** | Worker heartbeat | `POST /ojs/v1/workers/heartbeat` |
+| **CANCEL** | Cancel a job | `DELETE /ojs/v1/jobs/:id` |
+| **INFO** | Get job details | `GET /ojs/v1/jobs/:id` |
+
+The most important design principle here: **server-side intelligence, client simplicity**. Retry decisions, scheduling, state management, and coordination all live in the server. Clients just need PUSH, FETCH, ACK, FAIL, and BEAT. This keeps SDKs thin and easy to implement in new languages.
+
+## Queues
+
+A queue is a named, ordered collection of jobs waiting for execution. When you enqueue a job, you specify which queue it goes to (defaults to `"default"`).
+
+```js
+// Enqueue to the "email" queue
+await client.enqueue('email.send', ['user@example.com', 'welcome'], {
+  queue: 'email',
+});
+
+// Enqueue to the "reports" queue with high priority
+await client.enqueue('report.generate', [42], {
+  queue: 'reports',
+  priority: 10,
+});
+```
+
+Workers specify which queues they poll, in priority order:
+
+```js
+const worker = new OJSWorker({
+  url: 'http://localhost:8080',
+  queues: ['critical', 'default', 'low'],
+});
+```
+
+This worker checks `critical` first, then `default`, then `low`. Within a queue, higher-priority jobs are fetched first.
+
+## Workers
+
+A worker is a process that polls the server for jobs and executes registered handlers. Workers:
+
+- **Register handlers** by job type (e.g., `"email.send"` maps to your `sendEmail` function).
+- **Poll** the server for available jobs on their configured queues.
+- **Execute** the matched handler for each claimed job.
+- **Report** results back to the server (ACK on success, FAIL on error).
+- **Send heartbeats** so the server knows they are alive.
+
+Workers have three lifecycle states:
+
+| State | Behavior |
+|-------|----------|
+| `running` | Normal operation. Fetching and processing jobs. |
+| `quiet` | Stop fetching new jobs, but finish jobs already claimed. Used during deploys. |
+| `terminate` | Stop fetching, finish active jobs (or wait until grace period expires), then shut down. |
+
+The server communicates lifecycle changes via heartbeat responses. This enables zero-downtime deployments: send `quiet` to workers before deploying, deploy new code, start new workers, then `terminate` old workers.
+
+## Middleware
+
+OJS supports two middleware chains:
+
+- **Enqueue middleware** runs before a job is persisted. Use it to inject trace IDs, validate arguments, or add metadata.
+- **Execution middleware** wraps job execution on the worker. Use it for logging, metrics, error handling, or context propagation.
+
+```js
+// Execution middleware example: log every job
+worker.use(async (ctx, next) => {
+  console.log(`Starting ${ctx.job.type} (attempt ${ctx.job.attempt})`);
+  const start = Date.now();
+  try {
+    await next();
+    console.log(`Completed ${ctx.job.type} in ${Date.now() - start}ms`);
+  } catch (err) {
+    console.error(`Failed ${ctx.job.type}: ${err.message}`);
+    throw err;
+  }
+});
+```
+
+Middleware follows the `next()` pattern (like Rack, Express, or Koa). Each middleware calls `next()` to pass control to the next middleware in the chain, or throws/returns to short-circuit.
+
+## Retry policies
+
+When a job fails, the server evaluates its retry policy to decide what happens next. The default policy retries up to 3 times with exponential backoff and jitter.
+
+```json
+{
+  "retry": {
+    "max_attempts": 5,
+    "initial_interval": "PT1S",
+    "backoff_coefficient": 2.0,
+    "max_interval": "PT5M",
+    "jitter": true,
+    "non_retryable_errors": ["ValidationError"]
+  }
+}
+```
+
+If `max_attempts` is exhausted, the job moves to the `discarded` state (dead letter queue), where an operator can inspect it and manually retry if needed.
+
+## Structured errors
+
+When a job fails, the error is reported as a structured object, not just a string:
+
+```json
+{
+  "type": "SmtpConnectionError",
+  "message": "Connection refused to smtp.example.com:587",
+  "backtrace": [
+    "at SmtpClient.connect (smtp.js:42:15)",
+    "at EmailSender.send (email_sender.js:18:22)"
+  ]
+}
+```
+
+This enables cross-language debugging, automated error classification, and meaningful error display in dashboards.
+
+## Three-layer architecture
+
+OJS follows a three-layer architecture inspired by CloudEvents:
+
+| Layer | Document | Concern |
+|-------|----------|---------|
+| **Layer 1: Core** | [ojs-core](/spec/core/) | What a job IS: envelope, lifecycle, operations |
+| **Layer 2: Wire Format** | [ojs-json-format](/spec/json-format/) | How a job is SERIALIZED: JSON encoding rules |
+| **Layer 3: Protocol Binding** | [ojs-http-binding](/spec/http-binding/) | How a job is TRANSMITTED: HTTP endpoints |
+
+This separation means you can have different wire formats (JSON, Protobuf) and different transports (HTTP, gRPC) while sharing the same core job model.
+
+## Next steps
+
+- Follow the [Quickstart](/getting-started/quickstart/) to build a working system.
+- Read the [Core Specification](/spec/core/) for the full, normative details.
+- Explore [SDKs](/ecosystem/sdks/) for your language.
