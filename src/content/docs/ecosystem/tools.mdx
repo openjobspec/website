@@ -1,0 +1,197 @@
+---
+title: Tools
+description: Conformance test suite, JSON schemas, protobuf definitions, and development tools.
+---
+
+The OJS ecosystem includes several tools for validation, testing, code generation, and development.
+
+## Conformance test suite
+
+**Repository:** `ojs-conformance/`
+**Language:** Go (test runner), JSON (test definitions)
+
+The conformance test suite validates that an OJS backend correctly implements the specification. Tests are organized into five levels, each a superset of the previous.
+
+### Conformance levels
+
+| Level | Name | What it tests |
+|-------|------|---------------|
+| 0 | Core | Enqueue, fetch, ack, nack, health, queue listing, schemas |
+| 1 | Lifecycle | Job info, cancel, dead letter, heartbeat, state transitions |
+| 2 | Scheduling | Delayed jobs (`scheduled_at`), cron job registration, timezone handling |
+| 3 | Workflows | Chain, group, and batch workflow primitives |
+| 4 | Full | Batch enqueue, unique jobs, priority ordering, queue pause/resume, queue stats |
+
+### Running conformance tests
+
+The test runner makes HTTP requests against a running OJS server. Set `OJS_URL` to point to your server.
+
+Against the Redis backend:
+
+```bash
+cd ojs-backend-redis
+make docker-up                  # Start the server
+make conformance                # Run all levels
+make conformance-level-0        # Run just Level 0
+make conformance-level-1        # Run just Level 1
+```
+
+Against any OJS server:
+
+```bash
+cd ojs-conformance
+OJS_URL=http://localhost:8080 go test ./runner/http/ -v
+```
+
+### Test structure
+
+Test definitions are JSON files in `ojs-conformance/`. Each test specifies:
+
+- An HTTP request (method, path, body)
+- Expected response (status code, body fields, timing constraints)
+- Pre-conditions and post-conditions
+
+Tests are language-agnostic. The Go test runner executes them, but the test definitions could be used by a runner in any language.
+
+### Using conformance to build a backend
+
+If you are building a new OJS backend, start with Level 0 and work up. The conformance tests are the definitive guide to expected behavior. See [Implement a Backend](/guides/implement-a-backend/) for a walkthrough.
+
+---
+
+## JSON Schema package
+
+**Repository:** `ojs-json-schema/`
+**Language:** Node.js
+
+JSON Schema (draft 2020-12) definitions for all OJS data structures.
+
+### Schemas included
+
+| Schema | File | Description |
+|--------|------|-------------|
+| Job Envelope | `job.schema.json` | Complete job envelope validation |
+| Retry Policy | `retry-policy.schema.json` | Retry configuration |
+| Unique Policy | `unique-policy.schema.json` | Deduplication configuration |
+| Error | `error.schema.json` | API error response format |
+| Event | `event.schema.json` | Lifecycle event format |
+| Batch Request | `batch-request.schema.json` | Batch enqueue request |
+
+### Usage
+
+```bash
+pnpm add @openjobspec/json-schema
+```
+
+```js
+import jobSchema from '@openjobspec/json-schema/job.schema.json';
+import Ajv from 'ajv';
+
+const ajv = new Ajv();
+const validate = ajv.compile(jobSchema);
+const valid = validate(myJobEnvelope);
+```
+
+See [JSON Schemas Reference](/reference/json-schemas/) for the full schema definitions.
+
+---
+
+## Protobuf definitions
+
+**Repository:** `ojs-proto/`
+**Language:** Protobuf (with Go and TypeScript codegen)
+
+gRPC service definitions for the OJS gRPC protocol binding. Uses [Buf](https://buf.build/) for linting and code generation.
+
+### Contents
+
+- `ojs/v1/job.proto` - Job envelope message types
+- `ojs/v1/service.proto` - gRPC service definitions
+- `ojs/v1/error.proto` - Error response types
+- `ojs/v1/workflow.proto` - Workflow message types
+
+### Commands
+
+```bash
+buf lint          # Lint proto files
+buf generate      # Generate Go + TypeScript code
+```
+
+### Generated code
+
+Buf generates:
+
+- **Go:** Full gRPC client and server stubs with protobuf marshaling
+- **TypeScript:** Type definitions and client stubs for use with gRPC-web or Connect
+
+---
+
+## Development workflow
+
+### Setting up a local development environment
+
+1. **Start a backend:**
+
+   ```bash
+   cd ojs-backend-redis
+   make docker-up
+   ```
+
+2. **Verify health:**
+
+   ```bash
+   curl http://localhost:8080/ojs/v1/health
+   ```
+
+3. **Check conformance:**
+
+   ```bash
+   make conformance
+   ```
+
+4. **Run SDK tests:**
+
+   ```bash
+   # JavaScript
+   cd ojs-js-sdk && pnpm test
+
+   # Go
+   cd ojs-go-sdk && go test ./...
+
+   # Python
+   cd ojs-python-sdk && pytest
+   ```
+
+### Testing against different backends
+
+The beauty of OJS is that you can swap backends without changing your application code. To test against PostgreSQL instead of Redis:
+
+```bash
+cd ojs-backend-postgres
+make docker-up
+# Same SDK code, same tests, different backend
+```
+
+### Useful curl commands
+
+```bash
+# Health check
+curl http://localhost:8080/ojs/v1/health
+
+# Conformance manifest
+curl http://localhost:8080/ojs/manifest
+
+# Enqueue a job
+curl -X POST http://localhost:8080/ojs/v1/jobs \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{"type":"test.hello","args":["world"]}'
+
+# List queues
+curl http://localhost:8080/ojs/v1/queues
+
+# Get a job
+curl http://localhost:8080/ojs/v1/jobs/<job-id>
+
+# List dead letter jobs
+curl http://localhost:8080/ojs/v1/dead-letter
+```

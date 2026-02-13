@@ -1,0 +1,173 @@
+---
+title: Backends
+description: Redis and PostgreSQL backend implementations with feature comparison and deployment guides.
+---
+
+OJS is backend-agnostic. The specification defines the behavioral contract, and backends implement it. Two official backends are available, both supporting all five conformance levels.
+
+## Backend comparison
+
+| Feature | Redis | PostgreSQL |
+|---------|-------|------------|
+| **Storage engine** | Redis 7.0+ | PostgreSQL 15+ |
+| **Atomicity** | Lua scripts | SQL transactions |
+| **Dequeue strategy** | ZPOPMIN / sorted sets | `SELECT FOR UPDATE SKIP LOCKED` |
+| **Persistence** | RDB + AOF (configurable) | WAL (always durable) |
+| **Horizontal scaling** | Redis Cluster | Read replicas, Citus |
+| **Real-time notifications** | Pub/Sub | LISTEN/NOTIFY |
+| **Conformance level** | Level 4 (Full) | Level 4 (Full) |
+| **Best for** | High throughput, low latency | Durability, existing Postgres infrastructure |
+
+## Redis backend
+
+The Redis backend (`ojs-backend-redis`) uses Redis as the storage and coordination layer. It achieves atomic multi-key operations through Lua scripts.
+
+### When to use Redis
+
+- You need the highest possible throughput (tens of thousands of jobs per second).
+- You already run Redis in your infrastructure.
+- Low latency on enqueue and dequeue is critical.
+- You are comfortable with Redis persistence trade-offs (RDB snapshots can lose recent data on crash; AOF mitigates this).
+
+### Architecture
+
+The Redis backend uses three internal layers:
+
+- **`internal/api/`** handles HTTP requests using the chi router, validates requests, and returns structured error responses.
+- **`internal/core/`** defines business logic interfaces: the job state machine, retry evaluation, workflow engine, and middleware chains.
+- **`internal/redis/`** implements those interfaces using Redis data structures and Lua scripts for atomicity.
+
+Jobs are stored as Redis hashes. Queues are implemented as sorted sets (priority + FIFO ordering). Scheduled jobs use a separate sorted set keyed by execution time. A scheduler goroutine polls the scheduled set and promotes jobs to their target queue when the time arrives.
+
+### Quick start
+
+```yaml
+# docker-compose.yml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+```
+
+```bash
+docker compose up -d
+curl http://localhost:8080/ojs/v1/health
+```
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
+| `PORT` | `8080` | HTTP server port |
+
+### Building from source
+
+```bash
+cd ojs-backend-redis
+make build        # Builds to bin/ojs-server
+make test         # Runs tests with race detector
+make lint         # Runs go vet
+make docker-up    # Starts via Docker Compose
+```
+
+---
+
+## PostgreSQL backend
+
+The PostgreSQL backend (`ojs-backend-postgres`) uses PostgreSQL as the storage layer. It achieves non-blocking dequeue using `SELECT ... FOR UPDATE SKIP LOCKED` and real-time notifications using `LISTEN/NOTIFY`.
+
+### When to use PostgreSQL
+
+- Durability is non-negotiable (WAL ensures zero data loss on crash).
+- You already run PostgreSQL and want to avoid adding another infrastructure dependency.
+- You need strong transactional guarantees (enqueue a job inside the same transaction as your business logic).
+- Your throughput requirements are moderate (thousands of jobs per second, not tens of thousands).
+
+### Architecture
+
+The PostgreSQL backend follows the same three-layer structure as the Redis backend:
+
+- **`internal/api/`** handles HTTP requests using the chi router.
+- **`internal/core/`** defines business logic interfaces.
+- **`internal/postgres/`** implements those interfaces using pgx/v5 and SQL.
+
+Jobs are stored in a `jobs` table. The dequeue query uses `SELECT ... FOR UPDATE SKIP LOCKED`, which allows multiple workers to dequeue concurrently without blocking each other. `LISTEN/NOTIFY` enables workers to receive immediate notification when new jobs are available, reducing poll latency.
+
+### Quick start
+
+```yaml
+# docker-compose.yml
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ojs
+      POSTGRES_USER: ojs
+      POSTGRES_PASSWORD: ojs
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-postgres:latest
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://ojs:ojs@postgres:5432/ojs?sslmode=disable
+```
+
+```bash
+docker compose up -d
+curl http://localhost:8080/ojs/v1/health
+```
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `DATABASE_URL` | `postgres://localhost:5432/ojs?sslmode=disable` | PostgreSQL connection string |
+| `PORT` | `8080` | HTTP server port |
+
+### Building from source
+
+```bash
+cd ojs-backend-postgres
+make build        # Builds to bin/ojs-server
+make test         # Runs tests with race detector
+make lint         # Runs go vet
+make docker-up    # Starts via Docker Compose
+```
+
+---
+
+## Conformance levels
+
+Both official backends support all five conformance levels:
+
+| Level | Name | Features |
+|-------|------|----------|
+| 0 | Core | Enqueue, fetch, ack, nack, health, queues |
+| 1 | Lifecycle | Job info, cancel, dead letter, heartbeat |
+| 2 | Scheduling | Delayed jobs, cron jobs |
+| 3 | Workflows | Chain, group, batch primitives |
+| 4 | Full | Batch enqueue, unique jobs, priority, queue pause/resume, queue stats |
+
+Check a server's conformance level via the manifest:
+
+```bash
+curl http://localhost:8080/ojs/manifest
+```
+
+---
+
+## Building your own backend
+
+OJS is designed to be implementable on any storage engine. See the [Implement a Backend](/guides/implement-a-backend/) guide for a step-by-step walkthrough. The [conformance test suite](/ecosystem/tools/#conformance-suite) validates your implementation against all five levels.

@@ -1,0 +1,375 @@
+---
+title: SDKs
+description: Official OJS SDKs for Go, JavaScript/TypeScript, Python, Java, Rust, and Ruby.
+---
+
+Six official SDKs cover the most popular programming languages. All SDKs follow the same structure and provide the same capabilities: a client for producing jobs, a worker for consuming them, middleware chains, and workflow helpers.
+
+## SDK feature matrix
+
+| Feature | Go | JS/TS | Python | Java | Rust | Ruby |
+|---------|-----|-------|--------|------|------|------|
+| Client (enqueue, cancel, getJob) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Batch enqueue | Yes | Yes | Yes | Yes | Yes | Yes |
+| Worker (poll, handlers, concurrency) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Enqueue middleware | Yes | Yes | Yes | Yes | Yes | Yes |
+| Execution middleware | Yes | Yes | Yes | Yes | Yes | Yes |
+| Workflows (chain, group, batch) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Graceful shutdown | Yes | Yes | Yes | Yes | Yes | Yes |
+| Event emitter | Yes | Yes | Yes | Yes | Yes | Yes |
+| Type safety | Yes | Yes | Yes | Yes | Yes | N/A |
+
+---
+
+## Go SDK
+
+**Package:** `github.com/openjobspec/ojs-go-sdk`
+**Requirements:** Go 1.22+
+
+```bash
+go get github.com/openjobspec/ojs-go-sdk
+```
+
+### Client example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    ojs "github.com/openjobspec/ojs-go-sdk"
+)
+
+func main() {
+    client := ojs.NewClient(ojs.ClientConfig{
+        URL: "http://localhost:8080",
+    })
+
+    job, err := client.Enqueue(context.Background(), "email.send",
+        []any{"user@example.com", "welcome"},
+    )
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("Enqueued: %s\n", job.ID)
+}
+```
+
+### Worker example
+
+```go
+worker := ojs.NewWorker(ojs.WorkerConfig{
+    URL:         "http://localhost:8080",
+    Queues:      []string{"default"},
+    Concurrency: 10,
+})
+
+worker.Handle("email.send", func(ctx ojs.JobContext) error {
+    to := ctx.Args[0].(string)
+    template := ctx.Args[1].(string)
+    return sendEmail(to, template)
+})
+
+worker.Start(context.Background())
+```
+
+### Testing
+
+```bash
+go test ./... -race -cover
+go vet ./...
+```
+
+---
+
+## JavaScript / TypeScript SDK
+
+**Package:** `@openjobspec/sdk`
+**Requirements:** Node 18+
+
+```bash
+pnpm add @openjobspec/sdk
+```
+
+### Client example
+
+```ts
+import { OJSClient } from '@openjobspec/sdk';
+
+const client = new OJSClient({ url: 'http://localhost:8080' });
+
+const job = await client.enqueue('email.send', [
+  'user@example.com',
+  'welcome',
+]);
+console.log(`Enqueued: ${job.id}`);
+```
+
+### Worker example
+
+```ts
+import { OJSWorker } from '@openjobspec/sdk';
+
+const worker = new OJSWorker({
+  url: 'http://localhost:8080',
+  queues: ['default'],
+  concurrency: 10,
+});
+
+worker.handle('email.send', async (ctx) => {
+  const [to, template] = ctx.args;
+  await sendEmail(to, template);
+  return { delivered: true };
+});
+
+process.on('SIGINT', () => worker.stop());
+await worker.start();
+```
+
+### Testing
+
+```bash
+npm run build       # tsc
+npm test            # vitest run
+npm run test:watch  # vitest (watch mode)
+npm run lint        # tsc --noEmit
+```
+
+---
+
+## Python SDK
+
+**Package:** `openjobspec`
+**Requirements:** Python 3.11+
+
+```bash
+pip install openjobspec
+```
+
+### Client example
+
+```python
+import asyncio
+from openjobspec import OJSClient
+
+async def main():
+    client = OJSClient(url="http://localhost:8080")
+    job = await client.enqueue("email.send", ["user@example.com", "welcome"])
+    print(f"Enqueued: {job.id}")
+
+asyncio.run(main())
+```
+
+### Worker example
+
+```python
+from openjobspec import OJSWorker
+
+worker = OJSWorker(
+    url="http://localhost:8080",
+    queues=["default"],
+    concurrency=10,
+)
+
+@worker.handle("email.send")
+async def handle_email(ctx):
+    to, template = ctx.args
+    await send_email(to, template)
+    return {"delivered": True}
+
+worker.start()
+```
+
+### Testing
+
+```bash
+pip install -e ".[dev]"
+pytest                    # asyncio_mode = auto
+mypy src/                 # strict mode
+ruff check .              # linting
+```
+
+---
+
+## Java SDK
+
+**Package:** `com.openjobspec:ojs-sdk`
+**Requirements:** Java 21+
+
+```xml
+<dependency>
+  <groupId>com.openjobspec</groupId>
+  <artifactId>ojs-sdk</artifactId>
+  <version>1.0.0</version>
+</dependency>
+```
+
+### Client example
+
+```java
+import com.openjobspec.OJSClient;
+import com.openjobspec.Job;
+
+var client = OJSClient.create("http://localhost:8080");
+var job = client.enqueue("email.send",
+    List.of("user@example.com", "welcome"));
+System.out.println("Enqueued: " + job.id());
+```
+
+### Worker example
+
+```java
+import com.openjobspec.OJSWorker;
+
+var worker = OJSWorker.builder()
+    .url("http://localhost:8080")
+    .queues(List.of("default"))
+    .concurrency(10)
+    .build();
+
+worker.handle("email.send", ctx -> {
+    String to = (String) ctx.args().get(0);
+    String template = (String) ctx.args().get(1);
+    sendEmail(to, template);
+    return Map.of("delivered", true);
+});
+
+worker.start();
+```
+
+Uses Java 21 records and has zero required dependencies.
+
+### Testing
+
+```bash
+mvn clean package
+mvn test
+```
+
+---
+
+## Rust SDK
+
+**Package:** `openjobspec`
+**Requirements:** Rust 1.75+
+
+```bash
+cargo add openjobspec
+```
+
+### Client example
+
+```rust
+use openjobspec::OJSClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = OJSClient::new("http://localhost:8080");
+
+    let job = client
+        .enqueue("email.send", &["user@example.com", "welcome"])
+        .await?;
+
+    println!("Enqueued: {}", job.id);
+    Ok(())
+}
+```
+
+### Worker example
+
+```rust
+use openjobspec::{OJSWorker, JobContext};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut worker = OJSWorker::builder()
+        .url("http://localhost:8080")
+        .queues(&["default"])
+        .concurrency(10)
+        .build()?;
+
+    worker.handle("email.send", |ctx: JobContext| async move {
+        let to = ctx.args[0].as_str().unwrap();
+        let template = ctx.args[1].as_str().unwrap();
+        send_email(to, template).await?;
+        Ok(serde_json::json!({"delivered": true}))
+    });
+
+    worker.start().await
+}
+```
+
+Built on tokio and serde for full async support and type safety.
+
+### Testing
+
+```bash
+cargo build
+cargo test
+cargo clippy
+```
+
+---
+
+## Ruby SDK
+
+**Package:** `openjobspec`
+**Requirements:** Ruby 3.2+
+
+```bash
+gem install openjobspec
+```
+
+Or in your Gemfile:
+
+```ruby
+gem 'openjobspec'
+```
+
+### Client example
+
+```ruby
+require 'openjobspec'
+
+client = OJS::Client.new(url: 'http://localhost:8080')
+job = client.enqueue('email.send', ['user@example.com', 'welcome'])
+puts "Enqueued: #{job.id}"
+```
+
+### Worker example
+
+```ruby
+require 'openjobspec'
+
+worker = OJS::Worker.new(
+  url: 'http://localhost:8080',
+  queues: ['default'],
+  concurrency: 10
+)
+
+worker.handle('email.send') do |ctx|
+  to, template = ctx.args
+  send_email(to, template)
+  { delivered: true }
+end
+
+worker.start
+```
+
+Uses stdlib only with no external dependencies.
+
+### Testing
+
+```bash
+bundle install
+bundle exec rspec
+```
+
+---
+
+## Building your own SDK
+
+If your language is not listed above, you can build your own SDK. The OJS specification is designed to make SDK implementation straightforward. See the [Implement an SDK](/guides/implement-an-sdk/) guide for a detailed walkthrough.
+
+The key insight: OJS SDKs are thin HTTP wrappers. All intelligence (retry logic, scheduling, state management) lives in the server. Your SDK just needs to make HTTP requests and provide a nice API for registering handlers and polling for work.
