@@ -1,0 +1,223 @@
+---
+title: "Core Specification"
+description: "Job envelope, lifecycle states, and operations"
+---
+
+The OJS Core Specification defines what a job is, how it moves through its lifecycle, and what operations can be performed on it. This is Layer 1 of the three-layer architecture inspired by CloudEvents: Core (what a job IS), Wire Format (how it is SERIALIZED), and Protocol Bindings (how it is TRANSMITTED).
+
+## Design Principles
+
+Seven principles guide the specification and should guide implementation decisions:
+
+1. **Backend-agnostic.** Redis, PostgreSQL, Kafka, SQS, in-memory, all valid backends as long as they conform.
+2. **Language-agnostic.** A JavaScript app and a Go app should share the same job definitions and interoperate through a common backend.
+3. **Protocol-extensible.** HTTP, gRPC, AMQP, and other bindings are defined in separate companion specs.
+4. **Simple JSON-only arguments.** Job arguments use JSON-native types only. This forces clean separation between job definition and application state.
+5. **Convention over configuration.** Sensible defaults for every configurable parameter.
+6. **Server-side intelligence, client simplicity.** Retry logic, scheduling, and state management live in the backend. Clients need only implement PUSH, FETCH, ACK, FAIL, and BEAT.
+7. **Observable by default.** Structured error reporting and lifecycle events are first-class concepts.
+
+## Job Envelope
+
+The job envelope is the core data structure. It contains everything needed to identify, configure, route, execute, and track a background job. Attributes fall into three categories.
+
+### Required Attributes
+
+Every valid job envelope must include these five fields:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `specversion` | string | OJS spec version (e.g., `"1.0.0-rc.1"`) |
+| `id` | string | UUIDv7 job identifier |
+| `type` | string | Dot-namespaced job type (e.g., `"email.send"`) |
+| `queue` | string | Target queue name. Defaults to `"default"` |
+| `args` | array | Positional arguments for the handler. JSON-native types only. |
+
+The `type` field routes jobs to the correct handler. It uses dot-separated namespacing (`billing.invoice.generate`) to prevent collisions across teams. The `args` field is an array, not an object. This design, proven by Sidekiq over a decade, forces developers to pass identifiers rather than serialized objects, preventing stale data bugs and enabling cross-language interoperability.
+
+### Optional Attributes
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `meta` | object | `{}` | Extensible metadata for cross-cutting concerns (trace IDs, locale, tenant ID) |
+| `priority` | integer | `0` | Higher values mean higher priority |
+| `timeout` | integer | impl-defined | Max execution time in seconds |
+| `scheduled_at` | string | -- | ISO 8601 timestamp for future execution |
+| `expires_at` | string | -- | ISO 8601 deadline after which the job is discarded |
+| `retry` | object | impl-defined | Retry policy (see [Retry Policies](/spec/retry)) |
+| `unique` | object | -- | Uniqueness policy (see [Unique Jobs](/spec/unique-jobs)) |
+| `schema` | string | -- | URI referencing a schema for args validation |
+
+The `meta` object is the primary extension mechanism. Implementations must preserve all keys through the job lifecycle without modification. Well-known keys include `trace_id`, `tenant_id`, `locale`, and `correlation_id`.
+
+### System-Managed Attributes
+
+These are set by the implementation. Clients must not set them, and implementations must ignore client-provided values.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `state` | string | Current lifecycle state |
+| `attempt` | integer | Current attempt number (1-indexed) |
+| `created_at` | string | ISO 8601 creation timestamp |
+| `enqueued_at` | string | ISO 8601 enqueue timestamp |
+| `started_at` | string | ISO 8601 execution start timestamp |
+| `completed_at` | string | ISO 8601 terminal state timestamp |
+| `error` | object | Last error information |
+| `result` | any | Job result value |
+
+## Job Lifecycle State Machine
+
+Every job progresses through exactly eight states. The state machine is enforced by the implementation, and invalid transitions must be rejected.
+
+### States
+
+| State | Description | Terminal? |
+|-------|-------------|-----------|
+| `scheduled` | Has a future `scheduled_at` time, waiting for it to arrive | No |
+| `available` | Ready for pickup by a worker | No |
+| `pending` | Staged, awaiting external activation | No |
+| `active` | Claimed by a worker, currently executing | No |
+| `completed` | Handler executed successfully | **Yes** |
+| `retryable` | Handler failed, but retry attempts remain | No |
+| `cancelled` | Intentionally stopped via CANCEL | **Yes** |
+| `discarded` | Permanently failed (retries exhausted) or manually discarded | **Yes** |
+
+### State Diagram
+
+```
+                                ┌─────────────────────┐
+                                │       PUSH          │
+                                │   (enqueue a job)   │
+                                └──────────┬──────────┘
+                                           │
+                     ┌─────────────────────┼─────────────────────┐
+                     │                     │                     │
+                     ▼                     ▼                     ▼
+              ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+              │  scheduled  │      │  available  │      │   pending   │
+              └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
+                     │                    │                     │
+                     │  time arrives      │                     │ external
+                     └───────────────────►│◄────────────────────┘ activation
+                                          │
+                                          │ worker claims
+                                          ▼
+                                   ┌─────────────┐
+                                   │   active    │
+                                   └──────┬──────┘
+                                          │
+                    ┌────────────┬────────┼────────┬─────────────┐
+                    │            │        │        │             │
+                    ▼            ▼        │        ▼             ▼
+             ┌───────────┐ ┌──────────┐  │  ┌──────────┐ ┌───────────┐
+             │ completed │ │retryable │  │  │cancelled │ │ discarded │
+             └───────────┘ └────┬─────┘  │  └──────────┘ └─────┬─────┘
+                                │        │                     │
+                                │backoff │                     │ manual
+                                │expires │                     │ retry
+                                └───────►│◄────────────────────┘
+                                   ┌─────────────┐
+                                   │  available  │
+                                   └─────────────┘
+```
+
+### Valid State Transitions
+
+| From | To | Trigger |
+|------|----|---------|
+| *(initial)* | `scheduled` | PUSH with future `scheduled_at` |
+| *(initial)* | `available` | PUSH without `scheduled_at` |
+| *(initial)* | `pending` | PUSH with pending flag |
+| `scheduled` | `available` | Scheduled time arrives |
+| `available` | `active` | Worker claims via FETCH |
+| `pending` | `available` | External activation |
+| `active` | `completed` | ACK (handler succeeded) |
+| `active` | `retryable` | FAIL (retries remain) |
+| `active` | `cancelled` | CANCEL while executing |
+| `active` | `discarded` | FAIL (retries exhausted) |
+| `retryable` | `available` | Backoff delay expires |
+| `discarded` | `available` | Manual retry from dead letter |
+
+State transitions must be atomic. Only one worker can claim a job. Terminal states are permanent, with the sole exception of optional manual retry from discarded to available.
+
+## Logical Operations
+
+Seven abstract operations define what can be done with jobs. Protocol bindings (HTTP, gRPC) define the concrete wire interactions.
+
+### PUSH
+
+Enqueue one or more jobs for asynchronous processing. The implementation validates the envelope, sets system-managed attributes, enforces uniqueness if configured, runs enqueue middleware, and returns the complete job envelope.
+
+### FETCH
+
+Dequeue jobs for processing. The implementation selects the highest-priority available job from specified queues, atomically transitions it to `active`, increments the attempt counter, and associates a visibility timeout.
+
+### ACK
+
+Acknowledge successful completion. Transitions the job from `active` to `completed` and optionally stores a result value.
+
+### FAIL
+
+Report that execution failed. Provides a structured error object. The implementation evaluates the retry policy: if retries remain and the error is retryable, the job moves to `retryable`. Otherwise it moves to `discarded`.
+
+### BEAT
+
+Worker heartbeat. Extends the visibility timeout of active jobs and reports worker liveness. The server may respond with lifecycle directives (`running`, `quiet`, or `terminate`).
+
+### CANCEL
+
+Cancel a job in any non-terminal state. For active jobs, the server sets a cancellation flag that the worker can check via heartbeat.
+
+### INFO
+
+Retrieve the current state and full envelope of a job. Read-only, no side effects.
+
+## Error Reporting
+
+When a job fails, the error must be reported as a structured object:
+
+```json
+{
+  "type": "SmtpConnectionError",
+  "message": "Connection refused to smtp.example.com:587 after 30s timeout",
+  "backtrace": [
+    "at SmtpClient.connect (smtp.js:42:15)",
+    "at EmailSender.send (email_sender.js:18:22)",
+    "at handler (handlers/email.send.js:7:10)"
+  ]
+}
+```
+
+The `type` field enables pattern matching on errors (e.g., "retry on `ConnectionError`, discard on `ValidationError`"). The `backtrace` is an array of frame strings, limited to 50 frames or 10,000 characters.
+
+## Middleware
+
+OJS defines two middleware chains:
+
+- **Enqueue middleware** runs before a job is persisted during PUSH. It can modify the envelope, inject metadata (like trace IDs), validate arguments, or prevent enqueueing entirely.
+- **Execution middleware** wraps job execution on the worker side. It enables logging, metrics, error handling, and context propagation.
+
+Both chains use the `next()` pattern, where each middleware invokes the next in the chain.
+
+## Worker Lifecycle
+
+Workers have three lifecycle states, communicated via heartbeat responses:
+
+| State | Description |
+|-------|-------------|
+| `running` | Normal operation. Fetches and executes jobs. |
+| `quiet` | Stops fetching new jobs but finishes currently active ones. Used during graceful deployment. |
+| `terminate` | Stops fetching and shuts down after active jobs complete or a grace period expires. |
+
+This three-state model, borrowed from Faktory and Sidekiq, enables zero-downtime deployments: send `quiet` to all workers, deploy new code, start new workers, then `terminate` old workers.
+
+## Extension Points
+
+The core specification is intentionally minimal. Extensions are defined in companion specifications:
+
+- **Retry Policies** ([ojs-retry.md](/spec/retry)): Backoff algorithms, jitter, non-retryable error classification.
+- **Unique Jobs** ([ojs-unique-jobs.md](/spec/unique-jobs)): Deduplication dimensions, key computation, conflict resolution.
+- **Workflows** ([ojs-workflows.md](/spec/workflows)): Chain, group, and batch primitives for composing jobs.
+- **Cron / Periodic Jobs** ([ojs-cron.md](/spec/scheduling)): Recurring schedules, timezone handling, overlap prevention.
+- **Lifecycle Events**: Standard event vocabulary for job lifecycle tracking.
+- **Custom Attributes via `meta`**: The primary extension mechanism for user-defined attributes.

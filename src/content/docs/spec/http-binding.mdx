@@ -1,0 +1,391 @@
+---
+title: "HTTP Protocol Binding"
+description: "REST API endpoints and HTTP mapping for OJS operations"
+---
+
+The HTTP protocol binding maps OJS logical operations to HTTP methods, URIs, headers, and request/response bodies. HTTP is the required baseline protocol: every networked OJS implementation must support it. Other bindings (gRPC, WebSocket, AMQP) are optional extensions.
+
+All endpoints live under the `/ojs/v1` base path. The sole exception is the conformance manifest at `/ojs/manifest`, which sits outside the versioned prefix so clients can discover supported versions before making versioned requests.
+
+## Logical Operation Mapping
+
+Each OJS core operation maps to an HTTP method and path:
+
+| Operation | HTTP Method | Path | Status | Level |
+|-----------|-------------|------|--------|-------|
+| PUSH | `POST` | `/ojs/v1/jobs` | `201 Created` | 0 |
+| PUSH (batch) | `POST` | `/ojs/v1/jobs/batch` | `201 Created` | 4 |
+| FETCH | `POST` | `/ojs/v1/workers/fetch` | `200 OK` | 0 |
+| ACK | `POST` | `/ojs/v1/workers/ack` | `200 OK` | 0 |
+| FAIL | `POST` | `/ojs/v1/workers/nack` | `200 OK` | 0 |
+| BEAT | `POST` | `/ojs/v1/workers/heartbeat` | `200 OK` | 1 |
+| CANCEL | `DELETE` | `/ojs/v1/jobs/:id` | `200 OK` | 1 |
+| INFO | `GET` | `/ojs/v1/jobs/:id` | `200 OK` | 1 |
+
+Worker endpoints (FETCH, ACK, FAIL, BEAT) all use POST because they carry request bodies and produce side effects. FETCH modifies queue state, so GET would be inappropriate.
+
+## Content Negotiation
+
+The media type for OJS over HTTP is:
+
+```
+Content-Type: application/openjobspec+json
+```
+
+Servers must accept `application/json` as a fallback alias. All JSON bodies must be UTF-8 encoded without a byte order mark, per RFC 8259.
+
+Clients should include an `OJS-Version` header to indicate the desired spec version. Servers must include `OJS-Version` in all responses.
+
+## Standard Response Headers
+
+Every response must include:
+
+| Header | Description | Example |
+|--------|-------------|---------|
+| `OJS-Version` | Spec version used to process the request | `1.0.0-rc.1` |
+| `Content-Type` | Response content type | `application/openjobspec+json` |
+| `X-Request-Id` | Unique request identifier | `req_019414d4-8b2e-7c3a-b5d1-aaa111` |
+
+## Job Endpoints
+
+### Enqueue a Job (PUSH)
+
+**`POST /ojs/v1/jobs`**
+
+The request body must include `type` and `args`. The `args` field must be a JSON array.
+
+```bash
+curl -s -X POST https://jobs.example.com/ojs/v1/jobs \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{
+    "type": "email.send",
+    "args": ["user@example.com", "welcome", {"locale": "en"}],
+    "meta": {
+      "trace_id": "trace_abc123def456"
+    },
+    "options": {
+      "queue": "email",
+      "priority": 0,
+      "retry": {
+        "max_attempts": 5,
+        "initial_interval_ms": 1000,
+        "backoff_coefficient": 2.0
+      }
+    }
+  }'
+```
+
+**Options fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `queue` | string | `"default"` | Target queue name |
+| `priority` | integer | `0` | Higher values mean higher priority |
+| `timeout_ms` | integer | `30000` | Maximum execution time in milliseconds |
+| `delay_until` | string | `null` | ISO 8601 timestamp for delayed execution |
+| `expires_at` | string | `null` | ISO 8601 deadline after which the job is discarded |
+| `retry` | object | (default) | Retry policy override |
+| `unique` | object | `null` | Deduplication policy |
+| `tags` | string[] | `[]` | Tags for filtering and observability |
+| `visibility_timeout_ms` | integer | `30000` | Reservation period before reclaim |
+
+On success, the server responds with `201 Created` and includes a `Location` header pointing to the new job resource.
+
+### Batch Enqueue (PUSH batch)
+
+**`POST /ojs/v1/jobs/batch`**
+
+Enqueues multiple jobs atomically. If any job in the batch fails validation, the entire batch is rejected.
+
+```bash
+curl -s -X POST https://jobs.example.com/ojs/v1/jobs/batch \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{
+    "jobs": [
+      {
+        "type": "email.send",
+        "args": ["alice@example.com", "welcome", {"locale": "en"}],
+        "options": { "queue": "email" }
+      },
+      {
+        "type": "email.send",
+        "args": ["bob@example.com", "welcome", {"locale": "fr"}],
+        "options": { "queue": "email" }
+      }
+    ]
+  }'
+```
+
+### Get Job Details (INFO)
+
+**`GET /ojs/v1/jobs/:id`**
+
+Returns the full job envelope including current state, timestamps, and result or error data.
+
+### Cancel a Job (CANCEL)
+
+**`DELETE /ojs/v1/jobs/:id`**
+
+Cancels a job in any non-terminal state. For active jobs, the server sets a cancellation flag the worker can check via heartbeat. Returns `409 Conflict` if the job is already in a terminal state.
+
+## Worker Endpoints
+
+### Fetch Jobs (FETCH)
+
+**`POST /ojs/v1/workers/fetch`**
+
+Claims one or more jobs from specified queues. The server atomically transitions fetched jobs from `available` to `active`.
+
+```bash
+curl -s -X POST https://jobs.example.com/ojs/v1/workers/fetch \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{
+    "queues": ["email", "default"],
+    "count": 5,
+    "worker_id": "worker_019414d4-aaaa-7000-c000-111111111111",
+    "visibility_timeout_ms": 30000
+  }'
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `queues` | string[] | Yes | | Ordered list of queues to fetch from |
+| `count` | integer | No | `1` | Maximum number of jobs to fetch |
+| `worker_id` | string | No | | Identifier for the worker process |
+| `visibility_timeout_ms` | integer | No | `30000` | Reservation period before reclaim |
+
+An empty `jobs` array in the response indicates no work is available. This is a normal `200 OK`, not an error.
+
+### Acknowledge Completion (ACK)
+
+**`POST /ojs/v1/workers/ack`**
+
+Reports successful processing. Transitions the job from `active` to `completed`. Returns `409 Conflict` if the job is not in the `active` state.
+
+```bash
+curl -s -X POST https://jobs.example.com/ojs/v1/workers/ack \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{
+    "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+    "result": {
+      "message_id": "msg_019414d5-1234-7000-b000-aabbccddeeff",
+      "delivered": true
+    }
+  }'
+```
+
+### Report Failure (FAIL)
+
+**`POST /ojs/v1/workers/nack`**
+
+Reports that a job handler failed. The server evaluates the retry policy: if attempts remain and the error is retryable, the job moves to `retryable`. Otherwise it moves to `discarded`.
+
+```bash
+curl -s -X POST https://jobs.example.com/ojs/v1/workers/nack \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{
+    "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+    "error": {
+      "code": "handler_error",
+      "message": "SMTP connection refused: Connection timed out after 10000ms",
+      "retryable": true,
+      "details": {
+        "smtp_host": "mail.example.com",
+        "error_class": "SMTPConnectionError"
+      }
+    }
+  }'
+```
+
+The response includes the resulting state and, if retryable, the scheduled time for the next attempt.
+
+### Worker Heartbeat (BEAT)
+
+**`POST /ojs/v1/workers/heartbeat`**
+
+Extends the visibility timeout of active jobs and reports worker liveness. The server may respond with lifecycle directives.
+
+| Directive | Meaning |
+|-----------|---------|
+| `running` | Normal operation. Continue fetching and processing jobs. |
+| `quiet` | Stop fetching new jobs but finish active ones. |
+| `terminate` | Shut down as soon as possible after finishing active jobs. |
+
+This three-state model enables zero-downtime deployments: send `quiet` to all workers, deploy new code, start new workers, then `terminate` old workers.
+
+## Queue Endpoints
+
+| Method | Path | Description | Level |
+|--------|------|-------------|-------|
+| `GET` | `/ojs/v1/queues` | List all queues and their status | 0 |
+| `GET` | `/ojs/v1/queues/:name/stats` | Queue statistics (job counts, throughput, latency) | 4 |
+| `POST` | `/ojs/v1/queues/:name/pause` | Pause a queue (workers stop fetching) | 4 |
+| `POST` | `/ojs/v1/queues/:name/resume` | Resume a paused queue | 4 |
+
+Pausing a queue prevents workers from fetching new jobs but does not affect jobs already being processed. Attempts to enqueue to a paused queue return `422 Unprocessable Entity` with a `queue_paused` error code.
+
+## Dead Letter Endpoints
+
+| Method | Path | Description | Level |
+|--------|------|-------------|-------|
+| `GET` | `/ojs/v1/dead-letter` | List dead letter jobs (paginated) | 1 |
+| `POST` | `/ojs/v1/dead-letter/:id/retry` | Re-enqueue a dead letter job | 1 |
+| `DELETE` | `/ojs/v1/dead-letter/:id` | Permanently remove a dead letter job | 1 |
+
+The list endpoint supports filtering by queue via `?queue=email` and standard pagination parameters.
+
+## Cron Endpoints
+
+| Method | Path | Description | Level |
+|--------|------|-------------|-------|
+| `GET` | `/ojs/v1/cron` | List all registered cron schedules | 2 |
+| `POST` | `/ojs/v1/cron` | Register a new cron schedule | 2 |
+| `DELETE` | `/ojs/v1/cron/:name` | Remove a cron schedule | 2 |
+
+See [Scheduling](/spec/scheduling) for full cron job configuration details.
+
+## Workflow Endpoints
+
+| Method | Path | Description | Level |
+|--------|------|-------------|-------|
+| `POST` | `/ojs/v1/workflows` | Create and start a workflow | 3 |
+| `GET` | `/ojs/v1/workflows/:id` | Get workflow status and step details | 3 |
+| `DELETE` | `/ojs/v1/workflows/:id` | Cancel a workflow and its pending steps | 3 |
+
+See [Workflows](/spec/workflows) for chain, group, and batch primitives.
+
+## Schema Endpoints
+
+| Method | Path | Description | Level |
+|--------|------|-------------|-------|
+| `GET` | `/ojs/v1/schemas` | List registered schemas | 0 |
+| `POST` | `/ojs/v1/schemas` | Register a JSON Schema for args validation | 0 |
+| `GET` | `/ojs/v1/schemas/:uri` | Get a schema by URI (URL-encoded) | 0 |
+| `DELETE` | `/ojs/v1/schemas/:uri` | Remove a schema registration | 0 |
+
+## Error Handling
+
+All error responses use a consistent structure:
+
+```json
+{
+  "error": {
+    "code": "invalid_payload",
+    "message": "Human-readable description of the error.",
+    "retryable": false,
+    "details": {},
+    "request_id": "req_019414d4-0000-7000-a000-000000000000"
+  }
+}
+```
+
+The `retryable` field lets clients implement automated retry logic without parsing error messages.
+
+### HTTP Status Code Mapping
+
+| Status | Meaning | When Used |
+|--------|---------|-----------|
+| `200` | OK | Successful read, update, or command operation |
+| `201` | Created | Job or resource successfully created |
+| `400` | Bad Request | Malformed JSON, missing required fields, invalid types |
+| `404` | Not Found | Job, queue, or resource does not exist |
+| `409` | Conflict | Duplicate job (reject policy), invalid state transition |
+| `422` | Unprocessable Entity | Queue paused, unsupported conformance level |
+| `429` | Too Many Requests | Rate limit exceeded |
+| `500` | Internal Server Error | Unexpected server-side failure |
+| `503` | Service Unavailable | Backend is unreachable |
+
+### Standard Error Codes
+
+| Code | HTTP Status | Retryable | Description |
+|------|-------------|-----------|-------------|
+| `invalid_request` | `400` | No | Malformed HTTP request |
+| `invalid_payload` | `400` | No | Job args failed schema validation |
+| `schema_validation` | `400` | No | Args do not conform to registered schema |
+| `not_found` | `404` | No | Requested resource does not exist |
+| `duplicate` | `409` | No | Unique job constraint violated |
+| `queue_paused` | `422` | Yes | Target queue is currently paused |
+| `unsupported` | `422` | No | Feature requires a higher conformance level |
+| `rate_limited` | `429` | Yes | Rate limit exceeded |
+| `backend_error` | `500` | Yes | Backend storage or transport failure |
+
+Implementations may define additional error codes prefixed with `x_` (e.g., `x_custom_validation`). Clients should treat unrecognized codes as non-retryable.
+
+## Pagination
+
+All list endpoints support offset-based pagination:
+
+| Parameter | Type | Default | Max | Description |
+|-----------|------|---------|-----|-------------|
+| `limit` | integer | `50` | `100` | Maximum number of results |
+| `offset` | integer | `0` | | Number of results to skip |
+
+Responses include a `pagination` object:
+
+```json
+{
+  "pagination": {
+    "total": 1234,
+    "limit": 50,
+    "offset": 0,
+    "has_more": true
+  }
+}
+```
+
+## Rate Limiting
+
+Servers that enforce rate limiting must include these headers in every response:
+
+| Header | Type | Description |
+|--------|------|-------------|
+| `X-RateLimit-Limit` | integer | Maximum requests in the current window |
+| `X-RateLimit-Remaining` | integer | Requests remaining in the current window |
+| `X-RateLimit-Reset` | integer | Unix timestamp (seconds) when the window resets |
+
+When the limit is exceeded, the server responds with `429 Too Many Requests` and a `Retry-After` header (in seconds) per RFC 7231.
+
+## Request ID Tracking
+
+The server must generate a unique `X-Request-Id` for every request. If the client includes its own `X-Request-Id` header, the server should use that value instead. Request IDs should use the format `req_<UUIDv7>` and must appear both in response headers and in error response bodies as `error.request_id`.
+
+## Conformance Manifest
+
+**`GET /ojs/manifest`**
+
+Returns the server's capabilities, conformance level, and available protocol bindings. Served outside the `/v1` prefix so clients can discover supported versions before making versioned requests.
+
+```json
+{
+  "ojs_version": "1.0.0-rc.1",
+  "implementation": {
+    "name": "ojs-redis",
+    "version": "1.0.0",
+    "language": "go"
+  },
+  "conformance_level": 2,
+  "protocols": ["http"],
+  "backend": "redis",
+  "capabilities": {
+    "batch_enqueue": true,
+    "cron_jobs": true,
+    "dead_letter": true,
+    "delayed_jobs": true,
+    "schema_validation": true,
+    "unique_jobs": false,
+    "workflows": false
+  }
+}
+```
+
+The `capabilities` object provides granular feature detection beyond the coarse conformance level. A Level 2 implementation might support cron jobs but not delayed jobs, and the capabilities object makes this explicit.
+
+## Authentication
+
+Authentication is out of scope for this specification. OJS does not mandate a specific mechanism because requirements vary dramatically across deployments (mTLS for internal microservices, OAuth 2.0 for public APIs, API keys for managed platforms).
+
+Implementations should support authentication through standard HTTP headers (`Authorization`), mutual TLS, or custom headers prefixed with `X-OJS-`. When exposing OJS over public networks, TLS 1.2 or later is recommended.
+
+## CORS
+
+OJS endpoints are primarily designed for server-to-server communication. Implementations that serve browser-based dashboards should support CORS with an explicit allowlist of trusted origins. Never set `Access-Control-Allow-Origin: *` on endpoints that require authentication.

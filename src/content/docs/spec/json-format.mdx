@@ -1,0 +1,205 @@
+---
+title: "JSON Wire Format"
+description: "JSON serialization rules for OJS job envelopes"
+---
+
+The JSON Wire Format specification defines how OJS job envelopes are serialized to and from JSON. JSON is the required baseline wire format: every conformant OJS implementation must be able to produce and consume jobs serialized as JSON.
+
+This is Layer 2 of the OJS architecture, sitting between the Core Specification (what a job IS) and Protocol Bindings (how a job is TRANSMITTED).
+
+## Media Type and Content Negotiation
+
+The media type for an OJS job envelope encoded as JSON is:
+
+```
+application/openjobspec+json
+```
+
+Servers must accept `application/json` as a fallback alias. All JSON bodies must be UTF-8 encoded without a byte order mark, per RFC 8259.
+
+## Field Reference
+
+### Required Fields
+
+| OJS Attribute | JSON Key | JSON Type | Constraints |
+|---------------|----------|-----------|-------------|
+| Spec Version | `specversion` | string | Must be `"1.0"` |
+| ID | `id` | string | UUIDv7 format |
+| Type | `type` | string | Dot-namespaced, non-empty |
+| Queue | `queue` | string | Lowercase `[a-z0-9][a-z0-9\-\.]*` |
+| Arguments | `args` | array | JSON-native types only |
+
+### Optional Fields
+
+| OJS Attribute | JSON Key | JSON Type | Description |
+|---------------|----------|-----------|-------------|
+| Metadata | `meta` | object | String keys, JSON-native values |
+| Priority | `priority` | number (integer) | Higher values mean more important |
+| Timeout | `timeout` | number (integer) | Max execution time in seconds |
+| Scheduled At | `scheduled_at` | string | ISO 8601 / RFC 3339 timestamp |
+| Expires At | `expires_at` | string | ISO 8601 / RFC 3339 timestamp |
+| Retry Policy | `retry` | object | Structured retry configuration |
+| Unique Policy | `unique` | object | Deduplication configuration |
+| Visibility Timeout | `visibility_timeout` | number (integer) | Reservation period in seconds |
+
+### System-Managed Fields
+
+| OJS Attribute | JSON Key | JSON Type | Description |
+|---------------|----------|-----------|-------------|
+| State | `state` | string | Current lifecycle state |
+| Attempt | `attempt` | number (integer) | Current attempt (1-indexed) |
+| Created At | `created_at` | string | When the job was created |
+| Enqueued At | `enqueued_at` | string | When the job entered the queue |
+| Started At | `started_at` | string | When a worker began execution |
+| Completed At | `completed_at` | string | When the job reached a terminal state |
+| Result | `result` | any JSON type | Job return value |
+| Errors | `errors` | array | Error objects from failed attempts |
+
+## Argument Constraints
+
+The `args` array must contain only JSON-native types:
+
+| JSON Type | Example |
+|-----------|---------|
+| string | `"hello"` |
+| number | `42`, `3.14`, `-1` |
+| boolean | `true`, `false` |
+| null | `null` |
+| array | `[1, "two", true]` |
+| object | `{"key": "value"}` |
+
+Language-specific serialization formats (Python pickle, Ruby Marshal, Java serialization, PHP serialize, .NET BinaryFormatter) must never appear in `args`. This is the most critical security constraint in the specification.
+
+## Type Mapping
+
+| OJS Core Type | JSON Type | Notes |
+|---------------|-----------|-------|
+| String | string | Must be valid UTF-8 |
+| Integer | number | No fractional part. Safe up to 2^53 - 1 |
+| Float | number | IEEE 754 double-precision |
+| Boolean | boolean | |
+| Null | null | Explicit absence |
+| Timestamp | string | ISO 8601 / RFC 3339 |
+| Duration | string | ISO 8601 (e.g., `"PT30S"`) |
+| Identifier | string | UUIDv7, lowercase hex with hyphens |
+| Binary | string | base64url-encoded |
+
+Integers larger than 2^53 - 1 must be encoded as strings to prevent precision loss in JavaScript.
+
+## Timestamp Format
+
+All timestamps must conform to RFC 3339:
+
+```
+2025-06-01T09:00:00Z              -- UTC, no fractional seconds
+2025-06-01T09:00:00.000Z          -- UTC, millisecond precision
+2025-06-01T09:00:00.123456Z       -- UTC, microsecond precision
+2025-06-01T11:00:00+02:00         -- Explicit timezone offset
+```
+
+Timestamps without timezone information (e.g., `"2025-06-01T09:00:00"`) must be rejected. UTC with the `Z` suffix is recommended.
+
+Duration fields use ISO 8601 format: `"PT1S"` (1 second), `"PT5M"` (5 minutes), `"PT1H"` (1 hour), `"P1D"` (1 day).
+
+## Identifier Format
+
+Job IDs must be UUIDv7 values, serialized as lowercase hyphenated strings:
+
+```
+019539a4-b68c-7def-8000-1a2b3c4d5e6f
+```
+
+UUIDv7 is time-ordered and sortable, enabling efficient database indexing and chronological job listing without coordination.
+
+## Binary Data Encoding
+
+Binary data within `args`, `meta`, or `result` must use base64url encoding (RFC 4648 Section 5) without padding characters. Producers should include a sibling field like `content_encoding: "base64url"` to signal that a string value contains binary data.
+
+For large binary payloads, use external references (URIs, S3 paths) rather than inline encoding. Base64url inflates data size by approximately 33%.
+
+## Size Limits
+
+Implementations must support envelopes up to **1 MiB** (1,048,576 bytes) in their JSON-serialized form.
+
+Recommended field-level limits:
+
+| Field | Maximum | Rationale |
+|-------|---------|-----------|
+| `type` | 255 characters | Enough for deep dot-namespacing |
+| `queue` | 255 characters | Enough for hierarchical queue names |
+| `args` | 64 KiB | Arguments should be references, not large blobs |
+| `meta` | 16 KiB | Metadata should be concise |
+| `args` depth | 10 levels | Deeply nested structures indicate design issues |
+
+Batch requests must support at least 1,000 jobs per request.
+
+## Batch Format
+
+Multiple jobs can be submitted in a single request:
+
+```json
+{
+  "jobs": [
+    {
+      "specversion": "1.0",
+      "id": "019539a4-b68c-7def-8000-1a2b3c4d5e6f",
+      "type": "email.send",
+      "queue": "email",
+      "args": ["alice@example.com", "welcome"]
+    },
+    {
+      "specversion": "1.0",
+      "id": "019539a4-b68c-7def-8000-2b3c4d5e6f7a",
+      "type": "email.send",
+      "queue": "email",
+      "args": ["bob@example.com", "welcome"]
+    }
+  ]
+}
+```
+
+Each job in the array must be independently valid. Batch processing should be atomic where the backend supports it.
+
+## Error Format
+
+Errors in JSON responses use the following structure:
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "Job envelope validation failed: 'type' is required",
+    "retryable": false,
+    "details": {
+      "validation_errors": [
+        { "path": "$.type", "message": "required field missing" }
+      ]
+    },
+    "request_id": "req_019539a4-c000-7def-8000-aabbccddeeff"
+  }
+}
+```
+
+### Standard Error Codes
+
+| Code | Description | Retryable |
+|------|-------------|-----------|
+| `invalid_request` | Malformed JSON or missing required fields | No |
+| `invalid_payload` | Job envelope fails schema validation | No |
+| `schema_validation` | Args do not conform to registered schema | No |
+| `not_found` | Job or resource does not exist | No |
+| `duplicate` | Unique constraint violated | No |
+| `queue_paused` | Target queue is paused | Yes |
+| `rate_limited` | Rate limit exceeded | Yes |
+| `backend_error` | Backend storage/transport failure | Yes |
+| `timeout` | Operation timed out | Yes |
+| `unsupported` | Feature not supported at this level | No |
+| `envelope_too_large` | Job envelope exceeds size limit | No |
+
+## Serialization Rules
+
+- **Field ordering**: Implementations must not depend on the order of fields in a JSON object.
+- **Null handling**: Absent optional fields should be omitted rather than included with `null`.
+- **Unknown fields**: Must be preserved during round-tripping for forward compatibility.
+- **Whitespace**: Accept both compact and pretty-printed. Produce compact encoding for transmission.
+- **Duplicate keys**: Producers must not emit duplicate keys. Consumers should use the last value encountered.
