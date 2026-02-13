@@ -1,0 +1,374 @@
+---
+title: Error Codes
+description: Every OJS error type, message format, HTTP status mapping, and troubleshooting guidance.
+---
+
+OJS uses a structured error format for all error responses. Every error includes a machine-readable code, a human-readable message, and a flag indicating whether the client should retry.
+
+## Error response format
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "Job envelope validation failed: 'type' is required",
+    "retryable": false,
+    "details": { },
+    "request_id": "req_019414d4-0002-7000-a000-000000000001"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | Yes | Machine-readable error code from the table below |
+| `message` | string | Yes | Human-readable description |
+| `retryable` | boolean | Yes | Whether the client should retry the request |
+| `details` | object | No | Additional structured information |
+| `request_id` | string | No | Correlation ID for debugging |
+
+## Error code catalog
+
+### `invalid_request`
+
+**HTTP Status:** 400 Bad Request
+**Retryable:** No
+
+The request body is malformed JSON or is missing required fields.
+
+**Common causes:**
+- Invalid JSON syntax
+- Missing `type` or `args` field in enqueue request
+- Missing `job_id` in ACK/FAIL request
+- Wrong Content-Type header
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "Missing required field: 'type'",
+    "retryable": false
+  }
+}
+```
+
+**Fix:** Check that your request body is valid JSON and includes all required fields.
+
+---
+
+### `invalid_payload`
+
+**HTTP Status:** 400 Bad Request
+**Retryable:** No
+
+The job envelope is syntactically valid JSON but fails structural validation.
+
+**Common causes:**
+- Invalid job type format (must be dot-namespaced, lowercase)
+- Invalid queue name (must match `[a-z0-9][a-z0-9\-\.]*`)
+- `args` is not an array
+- `args` contains non-JSON-native types
+- Invalid UUIDv7 format for job ID
+- Timestamp missing timezone designator
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "invalid_payload",
+    "message": "Job envelope validation failed",
+    "retryable": false,
+    "details": {
+      "validation_errors": [
+        {
+          "path": "$.type",
+          "message": "must match pattern [a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Fix:** Validate your job envelope against the [JSON Schema](/reference/json-schemas/) before submitting.
+
+---
+
+### `schema_validation`
+
+**HTTP Status:** 400 Bad Request
+**Retryable:** No
+
+The job's `args` do not conform to the registered schema referenced by the `schema` field.
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "schema_validation",
+    "message": "Args do not conform to schema urn:ojs:schema:email.send:v1",
+    "retryable": false,
+    "details": {
+      "schema_uri": "urn:ojs:schema:email.send:v1",
+      "validation_errors": [
+        {
+          "path": "$.args[0]",
+          "message": "expected string, got number"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Fix:** Check that your `args` match the schema definition. Use the [schemas endpoint](/reference/http-api/#list-registered-schemas) to inspect the registered schema.
+
+---
+
+### `not_found`
+
+**HTTP Status:** 404 Not Found
+**Retryable:** No
+
+The requested job, queue, workflow, or other resource does not exist.
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "not_found",
+    "message": "Job 019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6 not found",
+    "retryable": false
+  }
+}
+```
+
+**Fix:** Verify the resource ID is correct. Jobs in terminal states may be pruned after the retention period.
+
+---
+
+### `duplicate`
+
+**HTTP Status:** 409 Conflict
+**Retryable:** No
+
+A unique constraint was violated. Another job with the same uniqueness key already exists in the specified states.
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "duplicate",
+    "message": "Unique constraint violated: existing job 019414d4-aaaa-7bbb-cccc-ddddeeee0001",
+    "retryable": false,
+    "details": {
+      "existing_job_id": "019414d4-aaaa-7bbb-cccc-ddddeeee0001",
+      "unique_key": "email.send:default:user@example.com"
+    }
+  }
+}
+```
+
+**Fix:** This is expected behavior when using unique jobs with `on_conflict: "reject"`. Either wait for the existing job to complete, use `"ignore"` to silently skip duplicates, or use `"replace"` to update the existing job.
+
+---
+
+### `conflict`
+
+**HTTP Status:** 409 Conflict
+**Retryable:** No
+
+An invalid state transition was attempted.
+
+**Common causes:**
+- ACK on a job that is not `active` (double-ack, or the job timed out and was reclaimed)
+- CANCEL on a job that is already `completed` or `discarded`
+- FAIL on a job that is not `active`
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "conflict",
+    "message": "Job is in state 'completed', cannot transition to 'cancelled'",
+    "retryable": false,
+    "details": {
+      "current_state": "completed",
+      "requested_transition": "cancelled"
+    }
+  }
+}
+```
+
+**Fix:** Check the job's current state before performing operations. If you see this on ACK, the job's visibility timeout may have expired and it was reclaimed by another worker. Consider increasing the visibility timeout or sending heartbeats more frequently.
+
+---
+
+### `queue_paused`
+
+**HTTP Status:** 503 Service Unavailable
+**Retryable:** Yes
+
+The target queue is paused and not accepting new jobs or fetches.
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "queue_paused",
+    "message": "Queue 'email' is paused",
+    "retryable": true
+  }
+}
+```
+
+**Fix:** Wait for the queue to be resumed, or enqueue to a different queue.
+
+---
+
+### `rate_limited`
+
+**HTTP Status:** 429 Too Many Requests
+**Retryable:** Yes
+
+The client has exceeded the rate limit. The response includes `Retry-After` and rate limit headers.
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "Rate limit exceeded: 100 requests per minute",
+    "retryable": true,
+    "details": {
+      "limit": 100,
+      "window": "1m",
+      "retry_after_seconds": 12
+    }
+  }
+}
+```
+
+**Fix:** Back off and retry after the `Retry-After` period. Consider using batch enqueue to reduce request count.
+
+---
+
+### `backend_error`
+
+**HTTP Status:** 503 Service Unavailable
+**Retryable:** Yes
+
+The backend storage system (Redis, PostgreSQL, etc.) is unavailable or returned an error.
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "backend_error",
+    "message": "Redis connection refused",
+    "retryable": true
+  }
+}
+```
+
+**Fix:** This is usually transient. Retry with exponential backoff. Check the [health endpoint](/reference/http-api/#health-check) for backend status.
+
+---
+
+### `timeout`
+
+**HTTP Status:** 504 Gateway Timeout
+**Retryable:** Yes
+
+The operation did not complete within the allowed time.
+
+**Fix:** Retry the request. If this happens consistently, check backend performance.
+
+---
+
+### `unsupported`
+
+**HTTP Status:** 422 Unprocessable Entity
+**Retryable:** No
+
+The requested feature is not supported by this server at its conformance level.
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "unsupported",
+    "message": "Workflows require conformance level 3 or higher",
+    "retryable": false,
+    "details": {
+      "feature": "workflows",
+      "required_level": 3,
+      "server_level": 1
+    }
+  }
+}
+```
+
+**Fix:** Check the [conformance manifest](/reference/http-api/#conformance-manifest) to see what features the server supports.
+
+---
+
+### `envelope_too_large`
+
+**HTTP Status:** 413 Payload Too Large
+**Retryable:** No
+
+The job envelope exceeds the server's size limit (minimum 1 MiB).
+
+**Example:**
+
+```json
+{
+  "error": {
+    "code": "envelope_too_large",
+    "message": "Job envelope size 2.3 MiB exceeds maximum 1 MiB",
+    "retryable": false,
+    "details": {
+      "size_bytes": 2411724,
+      "max_bytes": 1048576
+    }
+  }
+}
+```
+
+**Fix:** Reduce the size of your `args`. Store large data (files, images, documents) in external storage (S3, GCS) and pass references in `args` instead of inline data.
+
+## Job error format
+
+When a job handler fails, the error is reported as a structured object (separate from the API error format above). This is the error stored on the job envelope:
+
+```json
+{
+  "type": "SmtpConnectionError",
+  "message": "Connection refused to smtp.example.com:587 after 30s timeout",
+  "backtrace": [
+    "at SmtpClient.connect (smtp.js:42:15)",
+    "at EmailSender.send (email_sender.js:18:22)",
+    "at handler (handlers/email.send.js:7:10)"
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | Error type or exception class name |
+| `message` | string | Yes | Human-readable description |
+| `backtrace` | string[] | No | Stack trace frames (max 50 frames recommended) |
+
+The `type` field is used to match against `non_retryable_errors` in the retry policy. If a failing job's error type matches a non-retryable error, the job skips retry and moves directly to `discarded`.

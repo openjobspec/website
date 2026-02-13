@@ -1,0 +1,318 @@
+---
+title: JSON Schemas
+description: All JSON Schema definitions for OJS job envelopes, retry policies, unique policies, and errors.
+---
+
+OJS publishes JSON Schema (draft 2020-12) definitions for all data structures. Use these schemas for validation, code generation, and documentation.
+
+## Schema locations
+
+| Schema | URI |
+|--------|-----|
+| Job Envelope | `https://openjobspec.org/schemas/v1/job.schema.json` |
+| Retry Policy | `https://openjobspec.org/schemas/v1/retry-policy.schema.json` |
+| Unique Policy | `https://openjobspec.org/schemas/v1/unique-policy.schema.json` |
+| Error | `https://openjobspec.org/schemas/v1/error.schema.json` |
+| Event | `https://openjobspec.org/schemas/v1/event.schema.json` |
+| Batch Request | `https://openjobspec.org/schemas/v1/batch-request.schema.json` |
+
+## Job envelope schema
+
+The job envelope is the core data structure. It requires five fields: `specversion`, `id`, `type`, `queue`, and `args`.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjobspec.org/schemas/v1/job.schema.json",
+  "title": "OJS Job Envelope",
+  "description": "An Open Job Spec job envelope in JSON wire format.",
+  "type": "object",
+  "required": ["specversion", "id", "type", "queue", "args"],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "OJS specification version."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 job identifier."
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)*$",
+      "description": "Dot-namespaced job type."
+    },
+    "queue": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9\\-\\.]*$",
+      "description": "Target queue name."
+    },
+    "args": {
+      "type": "array",
+      "description": "Positional arguments. JSON-native types only."
+    },
+    "meta": {
+      "type": "object",
+      "description": "Extensible key-value metadata.",
+      "additionalProperties": true
+    },
+    "priority": {
+      "type": "integer",
+      "description": "Job priority. Higher = higher priority."
+    },
+    "timeout": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Max execution time in seconds."
+    },
+    "scheduled_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Earliest execution time (RFC 3339)."
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Expiration deadline (RFC 3339)."
+    },
+    "retry": {
+      "$ref": "https://openjobspec.org/schemas/v1/retry-policy.schema.json"
+    },
+    "unique": {
+      "$ref": "https://openjobspec.org/schemas/v1/unique-policy.schema.json"
+    },
+    "visibility_timeout": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Reservation period in seconds."
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+Unknown fields are preserved during round-tripping. This enables forward compatibility with future spec versions.
+
+## Retry policy schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjobspec.org/schemas/v1/retry-policy.schema.json",
+  "title": "OJS Retry Policy",
+  "type": "object",
+  "properties": {
+    "max_attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 3,
+      "description": "Total attempts including initial execution."
+    },
+    "initial_interval": {
+      "type": "string",
+      "default": "PT1S",
+      "description": "ISO 8601 duration before first retry."
+    },
+    "backoff_coefficient": {
+      "type": "number",
+      "minimum": 1.0,
+      "default": 2.0,
+      "description": "Multiplier for successive retry delays."
+    },
+    "max_interval": {
+      "type": "string",
+      "default": "PT5M",
+      "description": "ISO 8601 duration cap on retry delay."
+    },
+    "jitter": {
+      "type": "boolean",
+      "default": true,
+      "description": "Add randomness to prevent thundering herd."
+    },
+    "non_retryable_errors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Error types that skip retry entirely."
+    },
+    "on_exhaustion": {
+      "type": "string",
+      "enum": ["discard", "dead_letter"],
+      "default": "discard",
+      "description": "Action when all attempts are exhausted."
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## Unique policy schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjobspec.org/schemas/v1/unique-policy.schema.json",
+  "title": "OJS Unique Policy",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Fields from args to include in uniqueness hash."
+    },
+    "period": {
+      "type": "string",
+      "description": "ISO 8601 duration for uniqueness window."
+    },
+    "on_conflict": {
+      "type": "string",
+      "enum": ["reject", "replace", "ignore"],
+      "default": "reject",
+      "description": "Behavior when a duplicate is detected."
+    },
+    "states": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["scheduled", "available", "pending", "active", "retryable"]
+      },
+      "description": "States to consider when checking uniqueness."
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## Error schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openjobspec.org/schemas/v1/error.schema.json",
+  "title": "OJS Error",
+  "type": "object",
+  "required": ["code", "message", "retryable"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "description": "Machine-readable error code."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable error description."
+    },
+    "retryable": {
+      "type": "boolean",
+      "description": "Whether the client should retry."
+    },
+    "details": {
+      "type": "object",
+      "description": "Additional structured error information."
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Correlation ID for the failed request."
+    }
+  }
+}
+```
+
+## Validation examples
+
+### Valid minimal job
+
+```json
+{
+  "specversion": "1.0",
+  "id": "019539a4-b68c-7def-8000-1a2b3c4d5e6f",
+  "type": "email.send",
+  "queue": "default",
+  "args": ["user@example.com", "welcome"]
+}
+```
+
+### Valid job with retry and unique policies
+
+```json
+{
+  "specversion": "1.0",
+  "id": "019539a4-b68c-7def-8000-3c4d5e6f7a8b",
+  "type": "report.generate",
+  "queue": "reports",
+  "args": [{ "report_id": 42, "format": "pdf" }],
+  "retry": {
+    "max_attempts": 5,
+    "initial_interval": "PT1S",
+    "backoff_coefficient": 2.0,
+    "max_interval": "PT5M"
+  },
+  "unique": {
+    "key": ["report_id"],
+    "period": "PT1H",
+    "on_conflict": "ignore"
+  }
+}
+```
+
+### Invalid examples
+
+Missing required field (`type`):
+
+```json
+{
+  "specversion": "1.0",
+  "id": "019539a4-b68c-7def-8000-1a2b3c4d5e6f",
+  "queue": "default",
+  "args": []
+}
+```
+
+Invalid job ID format (not UUIDv7):
+
+```json
+{
+  "specversion": "1.0",
+  "id": "not-a-uuid",
+  "type": "email.send",
+  "queue": "default",
+  "args": []
+}
+```
+
+## Using schemas in your project
+
+### JavaScript/TypeScript (ajv)
+
+```js
+import Ajv from 'ajv';
+import jobSchema from '@openjobspec/json-schema/job.schema.json';
+
+const ajv = new Ajv();
+const validate = ajv.compile(jobSchema);
+
+const valid = validate({
+  specversion: '1.0',
+  id: '019539a4-b68c-7def-8000-1a2b3c4d5e6f',
+  type: 'email.send',
+  queue: 'default',
+  args: ['user@example.com'],
+});
+
+if (!valid) {
+  console.error(validate.errors);
+}
+```
+
+### Go
+
+```go
+import "github.com/santhosh-tekuri/jsonschema/v6"
+
+schema, _ := jsonschema.UnmarshalJSON(strings.NewReader(jobSchemaJSON))
+compiler := jsonschema.NewCompiler()
+compiled := compiler.MustCompile(schema)
+err := compiled.Validate(jobData)
+```

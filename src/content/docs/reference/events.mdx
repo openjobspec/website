@@ -1,0 +1,254 @@
+---
+title: Events Reference
+description: Lifecycle events, event envelope format, and event types for job observability.
+---
+
+OJS defines a standard event vocabulary for job lifecycle events. These events enable real-time monitoring, webhook integrations, audit logging, and workflow coordination.
+
+## Event envelope
+
+Every lifecycle event follows a consistent structure:
+
+```json
+{
+  "event": "job.completed",
+  "timestamp": "2026-02-12T10:30:02.789Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "attempt": 1,
+    "duration_ms": 1333,
+    "result": { "delivered": true }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event` | string | Event type from the vocabulary below |
+| `timestamp` | string | ISO 8601 / RFC 3339 timestamp |
+| `job_id` | string | UUIDv7 job identifier |
+| `job_type` | string | The dot-namespaced job type |
+| `queue` | string | Queue name |
+| `data` | object | Event-specific payload |
+
+## Event types
+
+### `job.enqueued`
+
+Emitted when a job is submitted via PUSH and enters `available`, `scheduled`, or `pending` state.
+
+```json
+{
+  "event": "job.enqueued",
+  "timestamp": "2026-02-12T10:30:00.123Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "state": "available",
+    "priority": 0
+  }
+}
+```
+
+### `job.started`
+
+Emitted when a worker claims a job via FETCH and the job enters `active` state.
+
+```json
+{
+  "event": "job.started",
+  "timestamp": "2026-02-12T10:30:01.456Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "attempt": 1,
+    "worker_id": "worker-abc123"
+  }
+}
+```
+
+### `job.completed`
+
+Emitted when a job is successfully acknowledged via ACK and enters `completed` state.
+
+```json
+{
+  "event": "job.completed",
+  "timestamp": "2026-02-12T10:30:02.789Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "attempt": 1,
+    "duration_ms": 1333,
+    "result": { "delivered": true }
+  }
+}
+```
+
+### `job.failed`
+
+Emitted when a job handler fails via FAIL. The job may enter `retryable` or `discarded` state depending on the retry policy.
+
+```json
+{
+  "event": "job.failed",
+  "timestamp": "2026-02-12T10:30:02.000Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "attempt": 1,
+    "duration_ms": 567,
+    "error": {
+      "type": "SmtpConnectionError",
+      "message": "Connection refused"
+    },
+    "next_state": "retryable",
+    "retry_at": "2026-02-12T10:30:03.000Z"
+  }
+}
+```
+
+### `job.retrying`
+
+Emitted when a retryable job's backoff period expires and it moves back to `available`.
+
+```json
+{
+  "event": "job.retrying",
+  "timestamp": "2026-02-12T10:30:03.000Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "attempt": 1,
+    "next_attempt": 2
+  }
+}
+```
+
+### `job.discarded`
+
+Emitted when a job enters the dead letter queue after exhausting all retry attempts.
+
+```json
+{
+  "event": "job.discarded",
+  "timestamp": "2026-02-12T10:35:00.000Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "attempt": 3,
+    "total_attempts": 3,
+    "error": {
+      "type": "SmtpConnectionError",
+      "message": "Connection refused"
+    }
+  }
+}
+```
+
+### `job.cancelled`
+
+Emitted when a job is cancelled via CANCEL.
+
+```json
+{
+  "event": "job.cancelled",
+  "timestamp": "2026-02-12T10:31:00.000Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "email.send",
+  "queue": "email",
+  "data": {
+    "previous_state": "available",
+    "cancelled_by": "api"
+  }
+}
+```
+
+### `job.scheduled`
+
+Emitted when a scheduled job's time arrives and it transitions from `scheduled` to `available`.
+
+```json
+{
+  "event": "job.scheduled",
+  "timestamp": "2026-02-12T10:30:00.000Z",
+  "job_id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "job_type": "notification.send_digest",
+  "queue": "notifications",
+  "data": {
+    "scheduled_at": "2026-02-12T10:30:00.000Z"
+  }
+}
+```
+
+## Worker events
+
+### `worker.registered`
+
+Emitted when a worker registers with the server.
+
+```json
+{
+  "event": "worker.registered",
+  "timestamp": "2026-02-12T10:00:00.000Z",
+  "data": {
+    "worker_id": "worker-abc123",
+    "queues": ["default", "email"],
+    "concurrency": 10
+  }
+}
+```
+
+### `worker.heartbeat`
+
+Emitted on each worker heartbeat.
+
+### `worker.quiet`
+
+Emitted when a worker transitions to the `quiet` state (stops fetching new jobs).
+
+### `worker.terminated`
+
+Emitted when a worker shuts down.
+
+## Subscribing to events
+
+How you subscribe to events depends on your backend:
+
+**Redis backend:** Uses Redis Pub/Sub channels. Subscribe to `ojs:events` for all events, or `ojs:events:job.completed` for a specific event type.
+
+**PostgreSQL backend:** Uses `LISTEN/NOTIFY`. Listen on the `ojs_events` channel.
+
+**HTTP webhooks:** Some backends support webhook registration for push-based event delivery. Check the [conformance manifest](/reference/http-api/#conformance-manifest) for webhook support.
+
+## Using events in SDKs
+
+All OJS SDKs provide an event emitter for subscribing to events on the client and worker:
+
+```js
+// JavaScript SDK
+const worker = new OJSWorker({ url: 'http://localhost:8080' });
+
+worker.events.on('job:completed', (event) => {
+  console.log(`Job ${event.job_id} completed in ${event.data.duration_ms}ms`);
+});
+
+worker.events.on('job:failed', (event) => {
+  console.error(`Job ${event.job_id} failed: ${event.data.error.message}`);
+});
+```
+
+```go
+// Go SDK
+worker.OnEvent("job.completed", func(e ojs.Event) {
+    log.Printf("Job %s completed", e.JobID)
+})
+```
