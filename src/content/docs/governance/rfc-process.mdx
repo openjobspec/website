@@ -1,0 +1,87 @@
+---
+title: RFC Process
+description: How changes to the Open Job Spec are proposed, reviewed, and accepted.
+---
+
+Changes to the Open Job Spec follow a staged RFC (Request for Comments) process. This process ensures that specification changes are well-considered, broadly reviewed, and backward-compatible where possible.
+
+## RFC stages
+
+| Stage | Name | Description | Requirements |
+|-------|------|-------------|-------------|
+| 0 | Strawman | Initial idea or problem statement | GitHub issue with problem description |
+| 1 | Proposal | Concrete specification change with rationale | RFC document, reference implementation |
+| 2 | Draft | Reviewed and refined specification text | Two conforming implementations, community review |
+| 3 | Accepted | Final specification text, ready for release | Consensus, conformance tests, documentation |
+
+### Stage 0: Strawman
+
+Anyone can submit a Stage 0 proposal by opening a GitHub issue. The issue should describe:
+
+- **The problem** you are trying to solve (not the solution).
+- **Prior art** from existing job systems (Sidekiq, Celery, BullMQ, etc.).
+- **Use cases** that motivate the change.
+
+Stage 0 proposals are discussion starters. They do not require specification text.
+
+### Stage 1: Proposal
+
+A Stage 0 issue advances to Stage 1 when a champion writes a formal RFC document. The RFC must include:
+
+- **Title and summary** of the proposed change.
+- **Motivation** with concrete use cases.
+- **Specification text** in the style of the existing spec (RFC 2119 keywords, rationale annotations).
+- **Backward compatibility** analysis.
+- **Reference implementation** in at least one official backend or SDK.
+
+RFC documents live in `spec/rfcs/` using the template at `spec/rfcs/RFC-0000-template.md`.
+
+### Stage 2: Draft
+
+A Stage 1 RFC advances to Stage 2 when:
+
+- At least **two conforming implementations** exist (e.g., one backend and one SDK, or two different SDKs).
+- The specification text has been **reviewed by at least two maintainers**.
+- Open concerns from community feedback have been addressed.
+
+Stage 2 means the specification text is stable enough for wider adoption, but minor changes are still expected.
+
+### Stage 3: Accepted
+
+A Stage 2 RFC advances to Stage 3 when:
+
+- **Consensus** has been reached among maintainers.
+- **Conformance tests** have been written and pass against at least two backends.
+- **Documentation** has been updated on the website.
+- The specification text is **frozen** (no further changes except editorial corrections).
+
+Stage 3 RFCs are merged into the main specification documents for the next release.
+
+## How to submit an RFC
+
+1. **Open a GitHub issue** describing the problem (Stage 0).
+2. Discuss the problem with the community. Get feedback on the approach.
+3. **Write an RFC** using the template in `spec/rfcs/RFC-0000-template.md`.
+4. **Open a pull request** adding your RFC to `spec/rfcs/`. Title it `RFC-NNNN: <title>`.
+5. The RFC will be reviewed, discussed, and iterated on in the PR.
+6. Once approved, the RFC advances through stages as implementations and tests are completed.
+
+## Versioning
+
+The OJS specification uses [Semantic Versioning 2.0.0](https://semver.org/):
+
+- **Major version** (e.g., 2.0.0): Breaking changes to the core specification. Job envelopes from the previous major version may not be compatible.
+- **Minor version** (e.g., 1.1.0): New features or extensions that are backward-compatible. Existing job envelopes and implementations continue to work.
+- **Patch version** (e.g., 1.0.1): Editorial corrections, clarifications, and bug fixes in the specification text. No behavioral changes.
+
+The current version is **1.0.0-rc.1** (Release Candidate 1).
+
+## Design principles for RFCs
+
+When proposing changes, keep these principles in mind:
+
+1. **Every MUST has a rationale.** Normative requirements need justification. "Because Sidekiq does it" is a good starting point, but explain *why* Sidekiq's approach works.
+2. **Backward compatibility matters.** Avoid breaking existing implementations unless the benefit clearly outweighs the cost.
+3. **Two implementations before acceptance.** This ensures the specification is implementable and catches design issues that only surface during implementation.
+4. **Simple JSON-only arguments.** Do not propose changes that introduce language-specific serialization.
+5. **Server-side intelligence.** Keep clients thin. Complexity should live in the backend.

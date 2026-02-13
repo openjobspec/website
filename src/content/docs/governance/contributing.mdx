@@ -1,0 +1,184 @@
+---
+title: Contributing
+description: How to contribute to the Open Job Spec project, including spec changes, SDKs, and backends.
+---
+
+Open Job Spec is an open-source project that welcomes contributions. This guide explains how to contribute to different parts of the project.
+
+## Ways to contribute
+
+| Area | Repository | How to help |
+|------|-----------|-------------|
+| Specification | `spec/` | Propose RFCs, review drafts, improve clarity |
+| Backends | `ojs-backend-redis/`, `ojs-backend-postgres/` | Fix bugs, add features, improve performance |
+| SDKs | `ojs-*-sdk/` | Fix bugs, improve ergonomics, add missing features |
+| Conformance | `ojs-conformance/` | Add test cases, improve coverage |
+| JSON Schemas | `ojs-json-schema/` | Update schemas, add validation tests |
+| Protobuf | `ojs-proto/` | Update service definitions |
+| Documentation | `website/` | Improve guides, fix typos, add examples |
+
+## Getting started
+
+1. Fork the repository on GitHub.
+2. Clone your fork locally.
+3. Create a branch for your change.
+4. Make your changes.
+5. Run the relevant tests (see below).
+6. Open a pull request.
+
+## Specification changes
+
+Changes to the specification follow the [RFC Process](/governance/rfc-process/). In short:
+
+1. Open a GitHub issue describing the problem (not the solution).
+2. Discuss with the community.
+3. Write an RFC using the template in `spec/rfcs/RFC-0000-template.md`.
+4. Open a PR with the RFC.
+5. Iterate based on feedback.
+
+Specification changes require at least two conforming implementations before acceptance.
+
+**Writing style for spec text:**
+- Use RFC 2119 keywords (MUST, SHOULD, MAY) only when they carry normative meaning, and only in uppercase.
+- Include a *Rationale* annotation for every MUST requirement.
+- Reference prior art from existing systems.
+- Keep language precise and unambiguous.
+
+## Backend contributions
+
+Both backends (Redis and PostgreSQL) are written in Go 1.22+ and share the same internal structure.
+
+### Development setup
+
+```bash
+# Redis backend
+cd ojs-backend-redis
+make docker-up      # Start Redis + server
+make test           # Run tests
+make lint           # Run go vet
+make conformance    # Run conformance tests
+
+# PostgreSQL backend
+cd ojs-backend-postgres
+make docker-up      # Start PostgreSQL + server
+make test           # Run tests
+make lint           # Run go vet
+```
+
+### Code organization
+
+Both backends follow the same three-layer pattern:
+
+- `internal/api/` - HTTP handlers (chi router)
+- `internal/core/` - Business logic interfaces
+- `internal/redis/` or `internal/postgres/` - Storage implementation
+
+When making changes, consider:
+- Does the change need to be reflected in both backends?
+- Does it affect conformance? Run `make conformance` to verify.
+- Is the change covered by tests?
+
+## SDK contributions
+
+All SDKs follow the same pattern regardless of language. When contributing to an SDK:
+
+### Before you start
+
+- Read the [Core Concepts](/getting-started/concepts/) to understand the OJS model.
+- Look at the existing SDK code to understand the pattern for that language.
+- Check open issues for the SDK you want to contribute to.
+
+### Language-specific guidelines
+
+**Go SDK** (`ojs-go-sdk/`)
+```bash
+go test ./... -race -cover
+go vet ./...
+```
+
+**JavaScript/TypeScript SDK** (`ojs-js-sdk/`)
+```bash
+pnpm install
+pnpm run build
+pnpm test
+pnpm run lint
+```
+
+**Python SDK** (`ojs-python-sdk/`)
+```bash
+pip install -e ".[dev]"
+pytest
+mypy src/
+ruff check .
+```
+
+**Java SDK** (`ojs-java-sdk/`)
+```bash
+mvn clean package
+mvn test
+```
+
+**Rust SDK** (`ojs-rust-sdk/`)
+```bash
+cargo build
+cargo test
+cargo clippy
+```
+
+**Ruby SDK** (`ojs-ruby-sdk/`)
+```bash
+bundle install
+bundle exec rspec
+```
+
+### SDK design principles
+
+- **Thin clients.** SDKs are HTTP wrappers. All intelligence lives in the server.
+- **Idiomatic code.** Follow the conventions of the target language. A Go SDK should feel like Go, a Python SDK should feel like Python.
+- **Minimal dependencies.** Prefer stdlib where possible. The Ruby SDK uses zero external dependencies.
+- **Full type safety.** Where the language supports it, provide strong types for job envelopes, errors, and configuration.
+- **Test coverage.** Unit tests with mocked transport, integration tests against a real server.
+
+## Documentation contributions
+
+The documentation website uses Astro + Starlight and lives in the `website/` directory.
+
+### Local development
+
+```bash
+cd website
+pnpm install
+pnpm dev          # Start dev server
+pnpm build        # Production build
+pnpm preview      # Preview production build
+```
+
+### Writing style
+
+- Conversational but technical. No marketing language.
+- Use concrete code examples.
+- No em dashes. Use commas, periods, or "and" instead.
+- Keep explanations concise. Link to detailed spec pages rather than repeating content.
+
+## Conformance test contributions
+
+The conformance test suite in `ojs-conformance/` contains JSON test definitions and a Go test runner.
+
+### Adding a test case
+
+1. Identify the conformance level for your test (0-4).
+2. Add a JSON test definition describing the HTTP request and expected response.
+3. Run the tests against both official backends to verify.
+
+```bash
+cd ojs-conformance
+OJS_URL=http://localhost:8080 go test ./runner/http/ -v
+```
+
+## Code of conduct
+
+We expect all contributors to be respectful and constructive. Focus on the technical merits of proposals. Disagree with ideas, not people.
+
+## License
+
+The specification is licensed under Apache 2.0. All code contributions must be compatible with this license.
