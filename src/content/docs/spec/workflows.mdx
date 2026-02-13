@@ -1,0 +1,189 @@
+---
+title: "Workflows"
+description: "Chain, group, and batch primitives for job composition"
+---
+
+OJS defines three workflow primitives for composing multiple jobs into coordinated units of work. These primitives cover the vast majority of real-world workflow patterns while remaining straightforward to implement correctly.
+
+| Primitive | Execution Model | Summary |
+|-----------|----------------|---------|
+| **Chain** | Sequential | Jobs execute one after another. Result of step N feeds step N+1. |
+| **Group** | Parallel | Jobs execute concurrently and independently. |
+| **Batch** | Parallel with callbacks | Like group, but fires callbacks on completion, success, or failure. |
+
+Full DAG support (arbitrary dependency edges between arbitrary nodes) is deferred to a future version. The three primitives here were chosen because they can be composed through nesting to express complex workflows, and they avoid the distributed consensus problems that make DAG execution notoriously difficult to get right.
+
+## Chain (Sequential Execution)
+
+A chain executes jobs one after another in a defined order. If any step fails after its retries are exhausted, the chain stops.
+
+```json
+{
+  "type": "chain",
+  "id": "wf_019539a4-chain-example",
+  "name": "order-processing",
+  "steps": [
+    { "type": "order.validate", "args": [{"order_id": "ord_123"}] },
+    { "type": "payment.charge", "args": [] },
+    { "type": "inventory.reserve", "args": [] },
+    { "type": "notification.send", "args": [] }
+  ]
+}
+```
+
+**How it works:**
+
+1. Only the first step is enqueued. All subsequent steps wait.
+2. When step N completes, step N+1 is automatically enqueued with step N's result available in `parent_results`.
+3. If any step fails (after retries are exhausted), subsequent steps are cancelled and the chain transitions to `failed`.
+4. The chain completes when the last step succeeds.
+
+Each step tracks its own state: `waiting`, `pending`, `active`, `completed`, `failed`, or `cancelled`.
+
+## Group (Parallel Execution)
+
+A group executes all jobs concurrently and independently. All jobs are enqueued immediately.
+
+```json
+{
+  "type": "group",
+  "id": "wf_019539a4-group-example",
+  "name": "multi-format-export",
+  "jobs": [
+    { "type": "export.csv", "args": [{"report_id": "rpt_456"}] },
+    { "type": "export.pdf", "args": [{"report_id": "rpt_456"}] },
+    { "type": "export.xlsx", "args": [{"report_id": "rpt_456"}] }
+  ]
+}
+```
+
+**How it works:**
+
+1. All jobs are enqueued simultaneously.
+2. Individual job failures do not affect other running jobs. If export.pdf fails, export.csv and export.xlsx continue.
+3. The group completes when all jobs finish successfully.
+4. The group fails when all jobs have reached a terminal state and at least one failed.
+
+The field is named `jobs` (not `steps`) to signal that there is no ordering or dependency between items.
+
+## Batch (Parallel with Callbacks)
+
+A batch is a group of concurrent jobs with automatic callback dispatch based on the collective outcome.
+
+```json
+{
+  "type": "batch",
+  "id": "wf_019539a4-batch-example",
+  "name": "bulk-email-send",
+  "jobs": [
+    { "type": "email.send", "args": ["user1@example.com", "welcome"] },
+    { "type": "email.send", "args": ["user2@example.com", "welcome"] },
+    { "type": "email.send", "args": ["user3@example.com", "welcome"] }
+  ],
+  "callbacks": {
+    "on_complete": { "type": "batch.report", "args": [] },
+    "on_success": { "type": "batch.celebrate", "args": [] },
+    "on_failure": { "type": "batch.alert", "args": [] }
+  }
+}
+```
+
+### Callback Firing Rules
+
+| All succeeded? | Any failed? | on_complete | on_success | on_failure |
+|----------------|-------------|-------------|------------|------------|
+| Yes | No | Fires | Fires | Does not fire |
+| No | Yes | Fires | Does not fire | Fires |
+
+At least one callback (`on_complete`, `on_success`, or `on_failure`) must be present. A batch without callbacks is just a group, so use a group instead.
+
+Callbacks must be fired exactly once. The implementation must use atomic operations to prevent duplicates, which is the most common batch implementation bug. Celery's chord primitive suffers from exactly this problem.
+
+## Data Passing
+
+### In Chains
+
+Each step receives a `parent_results` object containing previous steps' results, keyed by step index:
+
+```
+Step 0 executes with parent_results: {}
+Step 0 returns: { "order": { "id": "ord_123", "total": 99.99 } }
+
+Step 1 executes with parent_results: {
+  "0": { "order": { "id": "ord_123", "total": 99.99 } }
+}
+Step 1 returns: { "charge_id": "ch_abc", "amount": 99.99 }
+
+Step 2 executes with parent_results: {
+  "0": { "order": { "id": "ord_123", "total": 99.99 } },
+  "1": { "charge_id": "ch_abc", "amount": 99.99 }
+}
+```
+
+### In Groups
+
+Groups do not pass data between jobs (they are independent). When a group is used as a step within a chain, the group's collective results are passed to the next chain step, keyed by job index.
+
+### In Batches
+
+Batch callbacks receive results from all batch jobs in `parent_results`, keyed by job index. The results include data from both successful and failed jobs, so callbacks can perform aggregation and error analysis.
+
+Job results should be kept small. Results larger than 64 KB should use references (URIs, S3 paths) rather than inline data.
+
+## Workflow Lifecycle States
+
+| State | Description |
+|-------|-------------|
+| `pending` | Created but no jobs have started |
+| `running` | At least one job is active or pending |
+| `completed` | All jobs (and callbacks, for batches) completed successfully. Terminal. |
+| `failed` | A job failed with no remaining retries. Terminal. |
+| `cancelled` | Explicitly cancelled via the API. Terminal. |
+
+## Error Handling
+
+Each job within a workflow retains its own retry policy. A job is considered "failed" for workflow purposes only when it has exhausted all retries. A job in `retryable` state is not a workflow failure.
+
+**Chain failure**: The chain transitions to `failed`, all subsequent steps are cancelled, and no further steps are enqueued.
+
+**Group failure**: Other jobs continue running. The group waits for all jobs to finish, then transitions to `failed` if any job failed.
+
+**Batch failure**: Same as group for the jobs themselves. After all jobs finish, callbacks fire based on the collective outcome. If a callback itself fails after retries, the batch transitions to `failed`.
+
+## Composition and Nesting
+
+Primitives can be nested. A chain step can be a group (fan-out within a sequence), and a group job can be a chain (sequential within parallel).
+
+```json
+{
+  "type": "chain",
+  "name": "etl-with-fanout",
+  "steps": [
+    { "type": "data.extract", "args": [{"source": "api.example.com"}] },
+    {
+      "type": "group",
+      "name": "parallel-transforms",
+      "jobs": [
+        { "type": "transform.csv", "args": [] },
+        { "type": "transform.parquet", "args": [] },
+        { "type": "transform.json", "args": [] }
+      ]
+    },
+    { "type": "data.load", "args": [{"destination": "warehouse"}] }
+  ]
+}
+```
+
+This ETL pipeline extracts data, runs three transforms in parallel, then loads the results after all transforms complete.
+
+Implementations should support at least 3 levels of nesting and must validate nesting depth at creation time, not at runtime.
+
+## API Operations
+
+| Operation | HTTP Method | Path |
+|-----------|-------------|------|
+| Create workflow | `POST` | `/ojs/v1/workflows` |
+| Get workflow status | `GET` | `/ojs/v1/workflows/:id` |
+| Cancel workflow | `DELETE` | `/ojs/v1/workflows/:id` |
+
+Cancelling a workflow allows active jobs to complete (graceful cancellation) but cancels all pending and waiting jobs.

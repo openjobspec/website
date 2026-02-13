@@ -1,0 +1,371 @@
+---
+title: "Scheduling"
+description: "Cron expressions, timezone handling, and periodic jobs"
+---
+
+Cron jobs (also called periodic jobs or recurring jobs) execute on a repeating schedule. OJS defines a `CronJob` data structure, cron expression syntax, timezone handling, overlap prevention, and management endpoints. Each triggered occurrence creates a standard OJS job that follows the normal job lifecycle.
+
+## CronJob Structure
+
+A CronJob is a named, persistent registration that tells the system to enqueue a job on a repeating schedule:
+
+```json
+{
+  "name": "daily-report",
+  "cron": "0 9 * * *",
+  "timezone": "America/New_York",
+  "type": "report.generate",
+  "args": [{"report": "daily_summary"}],
+  "options": {
+    "queue": "reports",
+    "timeout": 300,
+    "retry": {
+      "max_attempts": 3,
+      "initial_interval": "PT30S",
+      "backoff_coefficient": 2.0
+    }
+  },
+  "overlap_policy": "skip",
+  "enabled": true,
+  "description": "Generate daily summary report at 9 AM ET"
+}
+```
+
+### Required Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Unique identifier for this registration. Must match `[a-z0-9][a-z0-9\-\.]*`, max 255 characters. |
+| `cron` | string | Cron expression or special expression defining the schedule. |
+| `type` | string | The OJS job type to enqueue on each occurrence (e.g., `"report.generate"`). |
+
+### Optional Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `args` | array | `[]` | Arguments passed to each triggered job. JSON-native types only. |
+| `timezone` | string | `"UTC"` | IANA timezone name for schedule evaluation. |
+| `options` | object | `{}` | Job options applied to each triggered job (queue, timeout, retry, tags, meta). |
+| `overlap_policy` | string | `"skip"` | What to do when a new occurrence fires while the previous run is still active. |
+| `enabled` | boolean | `true` | Whether this cron job is active. Disabled jobs remain registered but do not fire. |
+| `description` | string | `null` | Human-readable description for documentation and dashboards. |
+
+### System-Managed Fields (Read-Only)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `last_run_at` | ISO 8601 | Timestamp of the most recent trigger. `null` if never fired. |
+| `next_run_at` | ISO 8601 | Next scheduled trigger. `null` if disabled. |
+| `run_count` | integer | Total number of times this cron job has triggered. |
+| `created_at` | ISO 8601 | When the cron job was registered. |
+
+The `next_run_at` field is computed on registration and updated after every trigger, letting operators verify schedules are correct without waiting for the next occurrence.
+
+## Cron Expression Syntax
+
+OJS uses the standard 5-field cron format with an optional 6th field for seconds.
+
+### 5-Field Format
+
+```
+┌───────────── minute (0-59)
+│ ┌───────────── hour (0-23)
+│ │ ┌───────────── day of month (1-31)
+│ │ │ ┌───────────── month (1-12 or JAN-DEC)
+│ │ │ │ ┌───────────── day of week (0-7 or SUN-SAT, 0 and 7 are Sunday)
+│ │ │ │ │
+* * * * *
+```
+
+### 6-Field Format (Optional Seconds)
+
+Implementations may support a 6-field format where the first field is seconds (0-59). The system distinguishes 5-field from 6-field by counting whitespace-separated tokens. When using 5-field format, the seconds field is implicitly 0.
+
+### Special Characters
+
+| Character | Name | Description | Example |
+|-----------|------|-------------|---------|
+| `*` | Wildcard | Matches every value | `* * * * *` = every minute |
+| `,` | List | Multiple values | `1,15 * * * *` = minute 1 and 15 |
+| `-` | Range | Inclusive range | `1-5 * * * *` = minutes 1 through 5 |
+| `/` | Step | Increments | `*/15 * * * *` = every 15 minutes |
+| `L` | Last | Last day of month or last weekday | `0 0 L * *` = midnight on last day of month |
+| `W` | Weekday | Nearest weekday to given day | `0 0 15W * *` = nearest weekday to the 15th |
+| `#` | Nth | Nth weekday occurrence in month | `0 0 * * 5#3` = third Friday |
+
+The four basic characters (`*`, `,`, `-`, `/`) must be supported in all fields. The `L`, `W`, and `#` characters should be supported for day-of-month and day-of-week fields.
+
+Both numeric values and three-letter English abbreviations (case-insensitive) are accepted for months (`JAN`-`DEC`) and days of week (`SUN`-`SAT`).
+
+### Expression Validation
+
+Cron expressions must be validated at registration time. Invalid expressions are rejected with a `400 Bad Request` response. Validation errors include values outside allowed ranges, step values of 0, and malformed syntax. Day-of-month values valid only in some months (like 31) are allowed but the job simply does not fire in months where the day does not exist.
+
+## Special Expressions
+
+These aliases must be supported:
+
+| Expression | Equivalent | Description |
+|------------|------------|-------------|
+| `@yearly` or `@annually` | `0 0 1 1 *` | Once a year, midnight January 1st |
+| `@monthly` | `0 0 1 * *` | Once a month, midnight on the 1st |
+| `@weekly` | `0 0 * * 0` | Once a week, midnight on Sunday |
+| `@daily` or `@midnight` | `0 0 * * *` | Once a day at midnight |
+| `@hourly` | `0 * * * *` | Once an hour at minute 0 |
+
+### Interval Expression: `@every <duration>`
+
+Implementations should support `@every <duration>` for interval-based scheduling:
+
+```
+@every 30m      -- every 30 minutes
+@every 2h       -- every 2 hours
+@every 1h30m    -- every 1 hour 30 minutes
+@every 45s      -- every 45 seconds
+```
+
+An important distinction: `@every 30m` fires every 30 minutes from the time the cron job was registered or last triggered. `*/30 * * * *` fires at minutes 0 and 30 of every hour regardless of registration time. These are different behaviors.
+
+## Timezone Handling
+
+The `timezone` field must use IANA timezone database names (e.g., `"America/New_York"`, `"Europe/London"`, `"Asia/Tokyo"`). Fixed UTC offsets (`"+05:00"`) and abbreviations (`"EST"`) must be rejected because they do not encode daylight saving time transitions. The default timezone is `"UTC"`.
+
+### Daylight Saving Time
+
+**Spring forward (clock jumps ahead):** If a cron job is scheduled during the skipped hour, it must not fire. For example, `30 2 * * *` (2:30 AM) in `America/New_York` on the spring-forward day simply does not fire because 2:30 AM does not exist.
+
+**Fall back (clock falls behind):** If a cron job is scheduled during the repeated hour, it must fire exactly once during the first occurrence. For example, `30 1 * * *` (1:30 AM) on the fall-back day fires once during the first 1:30 AM (EDT), not again during the second 1:30 AM (EST).
+
+## Overlap Policies
+
+An overlap occurs when the next scheduled occurrence arrives while the previous run is still executing. The `overlap_policy` field controls the behavior.
+
+### `skip` (default)
+
+Skip the new occurrence entirely. The cron job's `next_run_at` advances to the following scheduled time. A `cron.skipped` event is emitted. This is the safest default because it prevents unbounded concurrency for long-running jobs.
+
+### `allow`
+
+Start a new run regardless. Multiple instances of the same cron job may execute simultaneously. Use only when concurrent runs are safe (e.g., stateless health checks).
+
+### `cancel_previous`
+
+Cancel the active run and start a new one. The previous job transitions to `cancelled`. Useful for "latest data wins" scenarios like cache rebuilds.
+
+### `enqueue`
+
+Enqueue the new run even if the previous one is active, but do not allow concurrent execution. The new job waits in the queue. If overlap persists across multiple occurrences, jobs accumulate. Implementations should warn when more than 2 queued occurrences exist.
+
+## Leader Election
+
+In distributed deployments, only one server instance must evaluate cron schedules at any given time. Without this, every instance would independently trigger jobs, producing duplicates proportional to the number of instances.
+
+Requirements:
+- At most one instance evaluates cron schedules at a time (the "cron leader").
+- Automatic failover must be supported. If the leader fails, another instance must acquire leadership within 30 seconds (recommended).
+- The leader must periodically renew its claim. If renewal fails, it must stop evaluating and allow another instance to take over.
+
+Common implementation strategies include PostgreSQL advisory locks, Redis distributed locks (`SET NX EX`), and consensus protocols (Raft, etcd leases).
+
+### Evaluation Loop
+
+The cron leader runs a loop that:
+
+1. Computes the next occurrence for each enabled cron job.
+2. For any job whose `next_run_at` has arrived, evaluates the overlap policy and enqueues if appropriate.
+3. Updates `last_run_at`, `next_run_at`, and `run_count`.
+4. Sleeps until the next earliest `next_run_at` (or a maximum of 60 seconds).
+
+If the leader wakes up after a pause and finds multiple missed occurrences, it fires at most one catch-up occurrence per cron job, then advances `next_run_at` to the next future time. This prevents a burst of jobs after a disruption.
+
+## Management Endpoints
+
+### Register a CronJob
+
+**HTTP:** `POST /ojs/v1/cron`
+**gRPC:** `RegisterCron`
+
+Registration uses upsert semantics: if a cron job with the given name already exists, its fields are updated. This enables declarative management where the application registers all cron jobs on startup.
+
+```bash
+curl -s -X POST https://jobs.example.com/ojs/v1/cron \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{
+    "name": "daily-report",
+    "cron": "0 9 * * *",
+    "timezone": "America/New_York",
+    "type": "report.generate",
+    "args": [{"report": "daily_summary"}],
+    "options": {
+      "queue": "reports",
+      "timeout": 300
+    },
+    "overlap_policy": "skip"
+  }'
+```
+
+Returns `201 Created` for new registrations, `200 OK` for updates.
+
+### List CronJobs
+
+**HTTP:** `GET /ojs/v1/cron`
+**gRPC:** `ListCron`
+
+Returns all registered cron jobs with their system-managed fields. Filtering by `enabled` status is supported via `?enabled=true`.
+
+### Get a CronJob
+
+**HTTP:** `GET /ojs/v1/cron/:name`
+
+Returns a single cron job by name. Returns `404 Not Found` if it does not exist.
+
+### Remove a CronJob
+
+**HTTP:** `DELETE /ojs/v1/cron/:name`
+**gRPC:** `UnregisterCron`
+
+Removes the cron registration. Jobs already enqueued by this schedule are not affected. Returns `404 Not Found` if the cron job does not exist.
+
+### Toggle a CronJob
+
+**HTTP:** `PATCH /ojs/v1/cron/:name`
+
+Enable or disable a cron job without removing its registration:
+
+```json
+{ "enabled": false }
+```
+
+When disabled, `next_run_at` is set to `null`, providing a clear signal that the cron job will not fire.
+
+## Events
+
+The cron subsystem emits two events:
+
+### `cron.triggered`
+
+Emitted when a cron job fires and a new job is enqueued:
+
+```json
+{
+  "event": "cron.triggered",
+  "data": {
+    "cron_name": "daily-report",
+    "job_id": "019501a2-3b4c-7d5e-8f6a-1b2c3d4e5f6a",
+    "job_type": "report.generate",
+    "run_count": 43,
+    "scheduled_time": "2026-02-12T14:00:00Z",
+    "actual_time": "2026-02-12T14:00:00.123Z"
+  }
+}
+```
+
+The delta between `scheduled_time` and `actual_time` reveals evaluation lag.
+
+### `cron.skipped`
+
+Emitted when an occurrence is skipped:
+
+```json
+{
+  "event": "cron.skipped",
+  "data": {
+    "cron_name": "daily-report",
+    "reason": "overlap_skip",
+    "active_job_id": "019501a2-1111-2222-3333-444455556666",
+    "scheduled_time": "2026-02-12T14:00:00Z"
+  }
+}
+```
+
+Skip reasons: `overlap_skip` (previous run still active), `disabled` (cron job was disabled), `dst_skip` (time does not exist due to spring-forward).
+
+Skipped occurrences are invisible by default since no job is created and no handler runs. Without this event, operators cannot tell whether the cron job is working correctly or broken.
+
+## Practical Examples
+
+**Weekday morning report:**
+
+```json
+{
+  "name": "weekday-morning-report",
+  "cron": "0 9 * * MON-FRI",
+  "timezone": "America/New_York",
+  "type": "report.generate",
+  "args": [{"report": "daily_summary", "format": "pdf"}],
+  "options": {
+    "queue": "reports",
+    "timeout": 600,
+    "retry": {"max_attempts": 3}
+  },
+  "overlap_policy": "skip"
+}
+```
+
+**Hourly cache cleanup:**
+
+```json
+{
+  "name": "cache-cleanup",
+  "cron": "@hourly",
+  "type": "maintenance.cache_cleanup",
+  "args": [{"max_age_hours": 24, "batch_size": 1000}],
+  "options": {
+    "queue": "maintenance",
+    "timeout": 120
+  },
+  "overlap_policy": "skip"
+}
+```
+
+**Every-5-minute health check with concurrent execution:**
+
+```json
+{
+  "name": "upstream-health-check",
+  "cron": "@every 5m",
+  "type": "monitoring.health_check",
+  "args": [{"targets": ["db", "cache", "search"]}],
+  "options": {
+    "queue": "monitoring",
+    "timeout": 30,
+    "retry": {"max_attempts": 1}
+  },
+  "overlap_policy": "allow"
+}
+```
+
+**Last day of month billing report:**
+
+```json
+{
+  "name": "monthly-billing",
+  "cron": "0 23 L * *",
+  "timezone": "America/Chicago",
+  "type": "billing.monthly_report",
+  "args": [{"include_pending": true}],
+  "options": {
+    "queue": "billing",
+    "timeout": 3600,
+    "retry": {"max_attempts": 3}
+  },
+  "overlap_policy": "cancel_previous"
+}
+```
+
+**Data sync with enqueue policy (every sync matters, no concurrency):**
+
+```json
+{
+  "name": "external-data-sync",
+  "cron": "*/30 * * * *",
+  "type": "integration.sync",
+  "args": [{"source": "api.partner.com", "endpoint": "/v2/orders"}],
+  "options": {
+    "queue": "integrations",
+    "timeout": 900,
+    "retry": {"max_attempts": 5}
+  },
+  "overlap_policy": "enqueue"
+}
+```

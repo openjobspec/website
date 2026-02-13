@@ -1,0 +1,294 @@
+---
+title: "Unique Jobs"
+description: "Job deduplication and conflict resolution"
+---
+
+Unique jobs prevent duplicate work from being enqueued. When a job carries a `UniquePolicy`, the backend checks for an existing job that matches the specified dimensions before inserting. OJS defines the semantics of deduplication (what dimensions define uniqueness, how conflicts are resolved, which job states participate) and requires implementations to declare the strength of their guarantee.
+
+## UniquePolicy Structure
+
+A `UniquePolicy` is an optional object attached to a job at enqueue time:
+
+```json
+{
+  "unique": {
+    "keys": ["type", "queue", "args"],
+    "args_keys": ["user_id"],
+    "meta_keys": [],
+    "period": "PT1H",
+    "states": ["available", "active", "scheduled", "retryable", "pending"],
+    "on_conflict": "reject"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `keys` | string[] | `["type"]` | Dimensions for the uniqueness fingerprint. Valid: `"type"`, `"queue"`, `"args"`, `"meta"`. |
+| `args_keys` | string[] | `null` (all args) | When `"args"` is in `keys`, which top-level keys within `args` to include. If omitted, all of `args` is included. |
+| `meta_keys` | string[] | `null` | When `"meta"` is in `keys`, which top-level keys within `meta` to include. Must be provided when `"meta"` is in `keys`. |
+| `period` | string | `null` (no expiry) | ISO 8601 duration for the uniqueness window. After this elapses from the original job's `created_at`, a new job is permitted. |
+| `states` | string[] | `["available", "active", "scheduled", "retryable", "pending"]` | Which job states to check against. Only jobs in these states are considered duplicates. |
+| `on_conflict` | string | `"reject"` | Strategy when a duplicate is detected: `"reject"`, `"replace"`, `"replace_except_schedule"`, or `"ignore"`. |
+
+Implementations must validate the policy at enqueue time and reject invalid policies immediately. A few important rules:
+
+- The `type` dimension is always included in the fingerprint, whether or not it appears in `keys`. Without it, jobs of different types with identical arguments would collide.
+- If `keys` contains `"meta"` but `meta_keys` is empty or null, the request must be rejected. Unlike `args`, metadata is a grab bag of cross-cutting concerns (trace IDs, timestamps) that would make every job unique if included wholesale.
+- If `args_keys` references keys that do not exist in the job's `args`, the request must be rejected.
+
+## Uniqueness Dimensions
+
+### `type` (always included)
+
+The job's type field (e.g., `"email.send"`). Always part of the fingerprint regardless of `keys` configuration, preventing cross-type collisions.
+
+### `queue`
+
+When included, the same job type with the same arguments on different queues is treated as distinct. When omitted, uniqueness is global across all queues.
+
+### `args`
+
+Either the full `args` payload or a subset filtered by `args_keys`. Selective args is the common case. For example, deduplicating on just `user_id` while ignoring `locale`:
+
+```json
+{
+  "keys": ["type", "args"],
+  "args_keys": ["user_id"]
+}
+```
+
+### `meta`
+
+Selected keys from the `meta` object via `meta_keys`. Useful for multi-tenant deduplication (e.g., one `cache.warm` per tenant).
+
+## Key Computation
+
+The uniqueness key is a deterministic hash of the selected dimensions:
+
+1. **Collect** dimension values (type, queue, filtered args, filtered meta).
+2. **Canonicalize** into a JSON object with keys sorted lexicographically at every nesting level, serialized as compact JSON per RFC 8785 (JSON Canonicalization Scheme). Unicode strings are normalized to NFC form.
+3. **Hash** using SHA-256 (recommended) or another deterministic hash function.
+4. **Encode** as a lowercase hexadecimal string.
+
+**Example:** Given a job with `type: "email.send"`, `queue: "notifications"`, `args: {"user_id": 42, "template": "welcome"}`, and `args_keys: ["user_id"]`, the canonical form is:
+
+```json
+{"args":{"user_id":42},"queue":"notifications","type":"email.send"}
+```
+
+Two jobs that produce the same key are considered duplicates.
+
+## Conflict Resolution Strategies
+
+### `reject` (default)
+
+Return an error. The new job is not enqueued. The HTTP binding returns `409 Conflict` with the `duplicate` error code and the existing job's ID.
+
+```json
+{
+  "error": {
+    "code": "duplicate",
+    "message": "A job matching the uniqueness key already exists",
+    "details": {
+      "existing_job_id": "019078a3-b5c7-7def-8a12-3456789abcde",
+      "existing_job_state": "active"
+    }
+  }
+}
+```
+
+This is the safest default. It makes duplicates visible to the caller rather than silently discarding them.
+
+### `replace`
+
+Cancel the existing job and enqueue the new one. The existing job transitions to `cancelled` before the new job is inserted (preserving an audit trail). Best-effort implementations must not replace a job in the `active` state and must fall back to `reject` behavior in that case.
+
+Use case: a user updates their profile picture. The latest `resize.avatar` job should always win.
+
+### `replace_except_schedule`
+
+Like `replace`, but preserves the original job's `scheduled_at` timestamp. For non-scheduled jobs, it behaves the same as `replace`.
+
+Use case: a scheduled notification's content needs updating, but it should still fire at its originally scheduled time.
+
+### `ignore`
+
+Silently discard the new job. Return `200 OK` (not `201 Created`) with the existing job's ID and `"deduplicated": true`.
+
+```json
+{
+  "job": {
+    "id": "019078a3-b5c7-7def-8a12-3456789abcde",
+    "type": "email.send",
+    "state": "available"
+  },
+  "deduplicated": true
+}
+```
+
+Use case: multiple microservices may try to enqueue the same `invoice.generate` job. The first one wins, and subsequent attempts are harmless no-ops.
+
+## State Filtering
+
+The `states` field controls which existing job states count as duplicates.
+
+**Default states:** `["available", "active", "scheduled", "retryable", "pending"]`
+
+Terminal states (`completed`, `cancelled`, `discarded`) are excluded by default because a completed job represents finished work. Enqueueing a new instance after completion is normal behavior.
+
+**Including terminal states** creates a stronger window that persists after a job finishes:
+
+```json
+{
+  "states": ["available", "active", "scheduled", "retryable", "pending", "completed"],
+  "period": "P7D",
+  "on_conflict": "ignore"
+}
+```
+
+This prevents re-sending a welcome email for the same user within 7 days, even after the first one completes.
+
+**Narrow filtering** is useful for specific patterns. Setting `"states": ["scheduled"]` prevents scheduling a duplicate while one is waiting, but allows a new job even if an identical one is currently active.
+
+## TTL / Period Semantics
+
+When `period` is set, the constraint begins at the existing job's `created_at` and expires at `created_at + period`. After expiry, a new job is permitted regardless of the existing job's state.
+
+When `period` is null, the constraint has no time limit and remains active as long as the existing job is in one of the checked states.
+
+The `period` and `states` constraints work together with AND semantics. A new job is considered a duplicate only if:
+
+1. An existing job with the same key exists, AND
+2. The existing job is in one of the listed states, AND
+3. The `created_at + period` has not elapsed (or period is null).
+
+**Common periods:**
+
+| Duration | ISO 8601 | Use Case |
+|----------|----------|----------|
+| 5 minutes | `PT5M` | Debounce rapid-fire events |
+| 1 hour | `PT1H` | Prevent duplicate notifications |
+| 24 hours | `P1D` | Daily report generation |
+| 7 days | `P7D` | Weekly digest deduplication |
+
+## Strength Levels
+
+OJS defines two strength levels because uniqueness guarantees vary based on backend capabilities.
+
+### Strong Uniqueness
+
+Guarantees that no two jobs with the same key can coexist, even under concurrent enqueue attempts. Typically achieved through database unique constraints, atomic compare-and-set (Redis `SET NX`), or serializable transactions.
+
+If two concurrent enqueue calls arrive with the same key and `on_conflict: "reject"`, exactly one succeeds and the other observes the conflict.
+
+### Best-Effort Uniqueness
+
+Minimizes duplicates but does not guarantee prevention under all conditions. Typically uses query-then-insert with a race window, advisory locks, or TTL-based locks.
+
+Under high concurrency, two jobs with the same key may briefly coexist, though in practice this is unlikely.
+
+### Conformance Declaration
+
+Implementations must declare their strength in the conformance manifest:
+
+```json
+{
+  "capabilities": {
+    "unique_jobs": {
+      "strength": "strong",
+      "mechanism": "Redis SET NX with Lua script atomicity"
+    }
+  }
+}
+```
+
+Both strength levels must support all four conflict strategies, all uniqueness dimensions, selective key filtering, period-based TTL, and configurable state filtering.
+
+## Interaction with Retry
+
+A job in the `retryable` state is included in the default state set, so a duplicate is rejected while the original is awaiting retry. When the retry fires (transitioning from `retryable` back to `available`), the uniqueness check is not re-evaluated. Uniqueness is an enqueue-time check only.
+
+When a job exhausts retries and moves to `discarded`, the constraint is released (since `discarded` is not in the default states), allowing a new job with the same fingerprint.
+
+**Example flow:**
+
+1. Job A (`email.send`, `user_id: 42`) is enqueued. Key is claimed.
+2. Job A fails, enters `retryable`. Key remains claimed.
+3. New enqueue for the same fingerprint is rejected as duplicate.
+4. Job A exhausts retries, transitions to `discarded`. Key is released.
+5. New enqueue for the same fingerprint succeeds.
+
+## Practical Examples
+
+**Type-level deduplication** (only one `report.daily` at a time):
+
+```json
+{
+  "type": "report.daily",
+  "args": {"date": "2026-02-12"},
+  "unique": {
+    "keys": ["type"],
+    "on_conflict": "ignore"
+  }
+}
+```
+
+**Args-based deduplication** (one welcome email per user):
+
+```json
+{
+  "type": "email.send_welcome",
+  "args": {"user_id": 42, "locale": "en-US"},
+  "unique": {
+    "keys": ["type", "args"],
+    "args_keys": ["user_id"],
+    "on_conflict": "reject"
+  }
+}
+```
+
+**Time-windowed deduplication** (at most one notification per hour):
+
+```json
+{
+  "type": "notification.push",
+  "args": {"user_id": 42, "event": "new_comment"},
+  "unique": {
+    "keys": ["type", "args"],
+    "args_keys": ["user_id", "event"],
+    "period": "PT1H",
+    "on_conflict": "ignore"
+  }
+}
+```
+
+**Queue-scoped deduplication** (per-queue, with replace):
+
+```json
+{
+  "type": "image.resize",
+  "queue": "thumbnails",
+  "args": {"image_id": "img_abc123"},
+  "unique": {
+    "keys": ["type", "queue", "args"],
+    "args_keys": ["image_id"],
+    "on_conflict": "replace"
+  }
+}
+```
+
+**Metadata-based deduplication** (one cache warm per tenant):
+
+```json
+{
+  "type": "cache.warm",
+  "args": {"resource": "products"},
+  "meta": {"tenant_id": "acme"},
+  "unique": {
+    "keys": ["type", "args", "meta"],
+    "meta_keys": ["tenant_id"],
+    "on_conflict": "ignore"
+  }
+}
+```

@@ -1,0 +1,208 @@
+---
+title: "Retry Policies"
+description: "Backoff strategies, jitter, and failure handling"
+---
+
+The retry policy governs what happens when a job handler fails: how many times the job is re-attempted, how long the system waits between attempts, and what happens when all attempts are exhausted.
+
+OJS adopts Temporal's structured retry policy format because it is explicit, language-agnostic, and avoids the field-overloading anti-patterns found in other systems (like Sidekiq's `retry: true` vs `retry: 5` vs `retry: false`).
+
+## RetryPolicy Structure
+
+```json
+{
+  "max_attempts": 3,
+  "initial_interval": "PT1S",
+  "backoff_coefficient": 2.0,
+  "max_interval": "PT5M",
+  "jitter": true,
+  "non_retryable_errors": [],
+  "on_exhaustion": "discard"
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_attempts` | integer | `3` | Total attempts including the first execution. `1` means no retries. `0` means never retry. |
+| `initial_interval` | string | `"PT1S"` | ISO 8601 duration before the first retry |
+| `backoff_coefficient` | number | `2.0` | Multiplier for successive retry delays. Must be >= 1.0 |
+| `max_interval` | string | `"PT5M"` | ISO 8601 duration cap on computed delay |
+| `jitter` | boolean | `true` | Whether to add randomness to prevent thundering herd |
+| `non_retryable_errors` | string[] | `[]` | Error types that skip retry entirely |
+| `on_exhaustion` | string | `"discard"` | Action when exhausted: `"discard"` or `"dead_letter"` |
+
+The `max_attempts` field counts total attempts, not retries. If `max_attempts` is 3, the job runs at most 3 times (1 initial execution plus 2 retries). This avoids the off-by-one confusion of Sidekiq's `retry: 25`, which means 26 total executions.
+
+## Backoff Strategies
+
+OJS supports four backoff strategies. The default is exponential.
+
+### Constant (None)
+
+The delay is the same for every retry.
+
+```
+delay(n) = initial_interval
+```
+
+Use case: polling an external service with a known, fixed recovery time.
+
+### Linear
+
+The delay increases by `initial_interval` for each successive retry.
+
+```
+delay(n) = initial_interval * n
+```
+
+Use case: moderate backpressure with gradually increasing delays.
+
+### Exponential (Default)
+
+The delay grows exponentially using the backoff coefficient.
+
+```
+delay(n) = initial_interval * backoff_coefficient^(n-1)
+```
+
+With `initial_interval = "PT1S"` and `backoff_coefficient = 2.0`:
+
+| Attempt | Retry # | Delay | Capped (max 5m) |
+|---------|---------|-------|-----------------|
+| 2 | 1 | 1s | 1s |
+| 3 | 2 | 2s | 2s |
+| 4 | 3 | 4s | 4s |
+| 5 | 4 | 8s | 8s |
+| 6 | 5 | 16s | 16s |
+| 7 | 6 | 32s | 32s |
+| 8 | 7 | 64s | 64s |
+| 9 | 8 | 128s | 128s |
+| 10 | 9 | 256s | 256s |
+| 11 | 10 | 512s | 300s (capped) |
+
+### Polynomial (Sidekiq-style)
+
+The delay grows polynomially, using the backoff coefficient as the exponent.
+
+```
+delay(n) = initial_interval * n^backoff_coefficient
+```
+
+With `backoff_coefficient = 4.0`, this produces Sidekiq-equivalent growth. Polynomial backoff grows slower than exponential, making it suitable for high-retry-count scenarios (25+ retries over hours or days).
+
+Regardless of strategy, the `max_interval` cap is always applied:
+
+```
+effective_delay(n) = min(raw_delay(n), max_interval)
+```
+
+## Jitter
+
+When `jitter` is `true`, the implementation applies a random multiplier to decorrelate retries:
+
+```
+jittered_delay = effective_delay * random(0.5, 1.5)
+final_delay = min(jittered_delay, max_interval)
+```
+
+The multiplier is uniformly distributed in the half-open interval `[0.5, 1.5)`. This means a 10-second computed delay becomes something between 5 and 15 seconds. The `max_interval` cap is applied again after jitter.
+
+Jitter is enabled by default because the thundering herd problem is common in production: when many jobs fail simultaneously due to a downstream outage, without jitter they would all retry at the same instant, recreating the same load spike.
+
+## Non-Retryable Errors
+
+The `non_retryable_errors` array lists error type strings that should never trigger a retry. Error types use dot-namespaced strings:
+
+```json
+{
+  "non_retryable_errors": [
+    "validation.payload_invalid",
+    "auth.*"
+  ]
+}
+```
+
+Matching supports exact match and prefix match (with `.*` suffix):
+
+| Error Type | Matches `"auth.*"`? |
+|------------|---------------------|
+| `auth.token_expired` | Yes (prefix match) |
+| `auth.forbidden` | Yes (prefix match) |
+| `auth` | No (`auth` does not start with `auth.`) |
+| `external.auth.failure` | No (prefix is `auth`, not `external.auth`) |
+
+When a handler error matches a non-retryable entry, the job immediately transitions to the terminal state determined by `on_exhaustion`, regardless of remaining attempts.
+
+## Handler Response Codes
+
+Handlers can override the default retry behavior at runtime by returning structured error codes:
+
+| Code | Meaning |
+|------|---------|
+| `RETRY` | Retry with normal backoff (the default when no code is specified) |
+| `DISCARD` | Discard immediately. No retry, no dead letter. |
+| `DEAD_LETTER` | Move to dead letter queue immediately. Skip all remaining retries. |
+| `FAIL` | Permanent failure. Semantically identical to `DISCARD` but signals a recognized failure condition. |
+
+Handler response codes take precedence over the retry policy. A payment handler that receives a "card stolen" response knows definitively that retrying is futile and can return `DEAD_LETTER` to escalate for investigation.
+
+## Default Retry Policy
+
+Jobs enqueued without an explicit retry policy receive these defaults:
+
+```json
+{
+  "max_attempts": 3,
+  "initial_interval": "PT1S",
+  "backoff_coefficient": 2.0,
+  "max_interval": "PT5M",
+  "jitter": true,
+  "non_retryable_errors": [],
+  "on_exhaustion": "discard"
+}
+```
+
+When a job specifies a partial retry policy, provided fields override the defaults and omitted fields inherit from them. A developer who only wants `max_attempts: 10` does not need to re-specify every other field.
+
+## Practical Examples
+
+**No retry at all** (analytics event that is acceptable to lose):
+
+```json
+{ "retry": { "max_attempts": 1 } }
+```
+
+**Aggressive retry with dead letter** (payment processing):
+
+```json
+{
+  "retry": {
+    "max_attempts": 25,
+    "initial_interval": "PT15S",
+    "backoff_coefficient": 4.0,
+    "max_interval": "PT1H",
+    "non_retryable_errors": ["payment.card_stolen", "payment.card_expired", "validation.*"],
+    "on_exhaustion": "dead_letter"
+  }
+}
+```
+
+**Constant backoff for polling** (check export status every 10 seconds):
+
+```json
+{
+  "retry": {
+    "max_attempts": 60,
+    "initial_interval": "PT10S",
+    "backoff_coefficient": 1.0,
+    "max_interval": "PT10S",
+    "jitter": false
+  }
+}
+```
+
+## Interaction with Visibility Timeout
+
+The retry delay and visibility timeout are independent mechanisms. The retry delay applies when a worker explicitly reports failure via FAIL. The visibility timeout applies when a worker crashes or disappears without acknowledging the job. When a visibility timeout expires, it counts as a failure attempt and follows the retry policy.
+
+Workers can extend the visibility timeout by sending heartbeats during long-running execution. This prevents jobs from being prematurely requeued while still actively processing.
