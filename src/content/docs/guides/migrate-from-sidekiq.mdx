@@ -1,0 +1,335 @@
+---
+title: "Migrate from Sidekiq"
+description: "Concept mapping and step-by-step migration guide from Sidekiq to OJS."
+---
+
+If you have been running Sidekiq in production, you already understand background job processing. OJS builds on many of the same ideas that Sidekiq pioneered (simple args, server-side retry, middleware chains), but makes them language-agnostic and backend-portable. This guide maps Sidekiq concepts to OJS equivalents and walks through a step-by-step migration.
+
+## Concept mapping
+
+| Sidekiq | OJS | Notes |
+|---------|-----|-------|
+| `Sidekiq::Worker` / `include Sidekiq::Job` | Handler function registered with worker | OJS handlers are plain functions, not classes |
+| `perform_async(args...)` | `client.enqueue(type, args)` | Both use JSON-native arrays for args |
+| `Sidekiq.redis` | OJS backend server | OJS abstracts the storage layer behind an HTTP API |
+| `Sidekiq::Queue` | OJS queue (named, server-managed) | Same concept, same `"default"` default |
+| `sidekiq_options queue: "email"` | `client.enqueue("email.send", args, queue: "email")` | Queue is per-enqueue, not per-class |
+| `sidekiq_retry_in` | Retry policy on the job envelope | Server-side, configurable per job |
+| `perform_in(5.minutes, args)` | `client.enqueue(type, args, delay: "5m")` | OJS uses `scheduled_at` or delay helpers |
+| `Sidekiq::Cron::Job` | `client.register_cron(...)` | OJS has native cron support at Level 2 |
+| Dead set / Retries tab | Dead letter queue + `discarded` state | OJS has structured error info per attempt |
+| Sidekiq Pro batch | `batch()` workflow primitive | OJS batch includes on_complete, on_success, on_failure |
+| `Sidekiq.server_middleware` | `worker.use` (execution middleware) | Same `next()` pattern |
+| `Sidekiq.client_middleware` | `client.enqueue_middleware` | Same `next()` pattern |
+
+## Code comparison
+
+### Sidekiq worker class
+
+```ruby
+# Sidekiq
+class EmailWorker
+  include Sidekiq::Job
+
+  sidekiq_options queue: "email", retry: 5
+
+  def perform(to, template)
+    EmailService.send(to: to, template: template)
+  end
+end
+
+# Enqueue
+EmailWorker.perform_async("user@example.com", "welcome")
+```
+
+### OJS handler registration
+
+```ruby
+# OJS Ruby SDK
+require "ojs"
+
+# Create client and worker
+client = OJS::Client.new("http://localhost:8080")
+worker = OJS::Worker.new("http://localhost:8080", queues: %w[email default])
+
+# Register handler (plain block, not a class)
+worker.register("email.send") do |ctx|
+  to = ctx.job.args[0]
+  template = ctx.job.args[1]
+  EmailService.send(to: to, template: template)
+  { status: "sent" }
+end
+
+# Enqueue
+client.enqueue("email.send", ["user@example.com", "welcome"],
+  queue: "email",
+  retry: OJS::RetryPolicy.new(max_attempts: 5)
+)
+
+# Start the worker (blocks)
+worker.start
+```
+
+The main structural difference: Sidekiq uses classes with `perform` methods. OJS uses plain functions (or blocks) registered by job type name. There is no need for a class hierarchy.
+
+## Key differences
+
+### Args format
+
+Both Sidekiq and OJS use JSON arrays for job arguments. Sidekiq's `perform(to, template)` maps to OJS `args: ["user@example.com", "welcome"]`. This is one of Sidekiq's best design decisions, and OJS adopted it directly.
+
+If you follow Sidekiq's best practice of keeping args as simple JSON types (strings, numbers, booleans), your args will work in OJS without changes.
+
+### 8-state lifecycle vs. Sidekiq's implicit states
+
+Sidekiq tracks jobs across Redis sorted sets (queued, busy, retries, dead, scheduled), but the states are implicit. OJS makes every state explicit and documents all valid transitions:
+
+```
+scheduled -> available -> active -> completed
+                                -> retryable -> available (retry)
+                                -> discarded (retries exhausted)
+                                -> cancelled (manual cancel)
+```
+
+This means you can always query a job's exact state and get a clear answer about what is happening.
+
+### Retry policies are per-job, not per-class
+
+In Sidekiq, retry settings live on the worker class:
+
+```ruby
+# Sidekiq: retry config is class-level
+sidekiq_options retry: 5, retry_in: 30
+```
+
+In OJS, retry settings are part of the job envelope. You set them at enqueue time:
+
+```ruby
+# OJS: retry config is per-enqueue
+client.enqueue("email.send", ["user@example.com"],
+  retry: OJS::RetryPolicy.new(
+    max_attempts: 5,
+    initial_interval: "PT1S",
+    backoff_coefficient: 2.0,
+    max_interval: "PT5M",
+    jitter: true,
+    non_retryable_errors: ["ValidationError"]
+  )
+)
+```
+
+This is more flexible. The same job type can have different retry policies depending on the context.
+
+### Cross-language support
+
+Sidekiq is Ruby-only. OJS jobs are language-agnostic JSON. You can enqueue a job from a Python service and process it with a Ruby worker, or vice versa.
+
+### Structured error reporting
+
+Sidekiq stores the last error message as a string. OJS stores structured errors with a type, message, and backtrace for every failed attempt:
+
+```json
+{
+  "errors": [
+    {
+      "type": "SmtpConnectionError",
+      "message": "Connection refused to smtp.example.com:587",
+      "backtrace": ["at SmtpClient.connect (smtp.rb:42)"],
+      "attempt": 1,
+      "failed_at": "2026-02-12T10:30:00Z"
+    }
+  ]
+}
+```
+
+## Step-by-step migration
+
+### Step 1: Start the OJS backend
+
+Run the OJS Redis backend alongside your existing Sidekiq Redis. OJS uses its own key namespace, so they do not conflict even on the same Redis instance.
+
+```yaml
+# docker-compose.yml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+```
+
+```bash
+docker compose up -d
+curl http://localhost:8080/ojs/v1/health
+# {"status":"ok"}
+```
+
+### Step 2: Install the Ruby SDK
+
+Add the OJS Ruby SDK to your Gemfile:
+
+```ruby
+# Gemfile
+gem "ojs"
+```
+
+```bash
+bundle install
+```
+
+### Step 3: Create an OJS client and worker
+
+```ruby
+# config/initializers/ojs.rb
+require "ojs"
+
+OJS_CLIENT = OJS::Client.new(ENV.fetch("OJS_URL", "http://localhost:8080"))
+```
+
+### Step 4: Convert worker classes to OJS handlers
+
+For each Sidekiq worker, create an equivalent OJS handler. You can do this incrementally, one worker at a time.
+
+**Before (Sidekiq):**
+
+```ruby
+class WelcomeEmailWorker
+  include Sidekiq::Job
+  sidekiq_options queue: "email"
+
+  def perform(user_id)
+    user = User.find(user_id)
+    Mailer.welcome(user).deliver_now
+  end
+end
+```
+
+**After (OJS):**
+
+```ruby
+# app/jobs/ojs_handlers.rb
+OJS_WORKER = OJS::Worker.new(
+  ENV.fetch("OJS_URL", "http://localhost:8080"),
+  queues: %w[email default],
+  concurrency: 10
+)
+
+OJS_WORKER.register("email.welcome") do |ctx|
+  user_id = ctx.job.args[0]
+  user = User.find(user_id)
+  Mailer.welcome(user).deliver_now
+  { user_id: user_id, status: "sent" }
+end
+```
+
+### Step 5: Update enqueue calls
+
+**Before:**
+
+```ruby
+WelcomeEmailWorker.perform_async(user.id)
+```
+
+**After:**
+
+```ruby
+OJS_CLIENT.enqueue("email.welcome", [user.id], queue: "email")
+```
+
+### Step 6: Run both systems in parallel
+
+During the migration, keep both Sidekiq and OJS running. Migrate one job type at a time:
+
+1. Convert the worker class to an OJS handler.
+2. Update the enqueue calls.
+3. Deploy and verify the job processes correctly.
+4. Remove the old Sidekiq worker class.
+
+This approach lets you roll back individual job types if something goes wrong.
+
+### Step 7: Convert middleware
+
+**Sidekiq server middleware:**
+
+```ruby
+class LoggingMiddleware
+  def call(worker, job, queue)
+    start = Time.now
+    yield
+    puts "#{worker.class} done in #{Time.now - start}s"
+  end
+end
+
+Sidekiq.configure_server do |config|
+  config.server_middleware do |chain|
+    chain.add LoggingMiddleware
+  end
+end
+```
+
+**OJS execution middleware:**
+
+```ruby
+OJS_WORKER.use("logging") do |ctx, &nxt|
+  start = Time.now
+  result = nxt.call
+  puts "#{ctx.job.type} done in #{Time.now - start}s"
+  result
+end
+```
+
+### Step 8: Migrate scheduled and cron jobs
+
+**Sidekiq scheduled jobs:**
+
+```ruby
+# Before
+WelcomeEmailWorker.perform_in(1.hour, user.id)
+
+# After
+OJS_CLIENT.enqueue("email.welcome", [user.id],
+  queue: "email",
+  delay: "1h"
+)
+```
+
+**Sidekiq-Cron jobs:**
+
+```ruby
+# Before
+Sidekiq::Cron::Job.create(name: "daily-report", cron: "0 9 * * *", class: "DailyReportWorker")
+
+# After
+OJS_CLIENT.register_cron(
+  name: "daily-report",
+  cron: "0 9 * * *",
+  timezone: "America/New_York",
+  type: "report.daily",
+  args: []
+)
+```
+
+### Step 9: Cutover and remove Sidekiq
+
+Once all job types are migrated and running smoothly on OJS:
+
+1. Remove `sidekiq` and `sidekiq-cron` from your Gemfile.
+2. Remove Sidekiq worker classes and configuration.
+3. Shut down Sidekiq processes.
+
+## What you gain
+
+- **Language interoperability.** Your Ruby app can enqueue jobs that a Go or Python service processes. Useful for gradual language migrations or polyglot architectures.
+- **Backend portability.** Switch from Redis to PostgreSQL without changing application code. Useful if you want SQL-level durability guarantees.
+- **Structured error history.** Every failed attempt gets a full error record, not just the last error message.
+- **Conformance testing.** The OJS conformance suite verifies that your backend behaves correctly. No more guessing about edge cases.
+- **Standardized retry policies.** Exponential backoff with jitter, non-retryable error classification, and per-job configuration are all built in.
+- **Workflow primitives.** Chain, group, and batch give you Sidekiq Pro batch-like functionality (and more) as part of the standard.
