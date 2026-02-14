@@ -1,0 +1,194 @@
+---
+title: "Tutorial: Your First Job in TypeScript"
+description: Build a complete background job system with TypeScript from scratch.
+---
+
+This tutorial extends the [Quickstart](/getting-started/quickstart/) with TypeScript types, retry policies, middleware, and batch operations.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [Node.js](https://nodejs.org/) 18 or later
+- A running OJS server (see [Quickstart Step 1](/getting-started/quickstart/#step-1-start-the-ojs-server))
+
+## Step 1: Initialize a TypeScript project
+
+```bash
+mkdir ojs-ts-tutorial && cd ojs-ts-tutorial
+npm init -y
+npm add @openjobspec/sdk
+npm add -D typescript @types/node tsx
+npx tsc --init --target es2022 --module nodenext --moduleResolution nodenext
+```
+
+## Step 2: Define typed job arguments
+
+Create `src/jobs.ts`:
+
+```typescript
+// src/jobs.ts
+
+// Define the argument types for each job type
+export type EmailSendArgs = [to: string, template: string, options?: { priority: string }];
+export type ReportGenerateArgs = [reportId: string, format: 'pdf' | 'csv'];
+```
+
+## Step 3: Enqueue jobs with types
+
+Create `src/enqueue.ts`:
+
+```typescript
+// src/enqueue.ts
+import { OJSClient } from '@openjobspec/sdk';
+import type { EmailSendArgs, ReportGenerateArgs } from './jobs.js';
+
+const client = new OJSClient({ url: 'http://localhost:8080' });
+
+// Type-safe enqueue
+const emailJob = await client.enqueue('email.send', [
+  'user@example.com',
+  'welcome',
+  { priority: 'high' },
+] satisfies EmailSendArgs);
+
+console.log(`Email job: ${emailJob.id} (${emailJob.state})`);
+
+// Enqueue with retry policy
+const reportJob = await client.enqueue('report.generate', [
+  'rpt_001',
+  'pdf',
+] satisfies ReportGenerateArgs, {
+  queue: 'reports',
+  retry: {
+    maxAttempts: 3,
+    backoff: 'exponential',
+  },
+});
+
+console.log(`Report job: ${reportJob.id} (${reportJob.state})`);
+```
+
+Run it:
+
+```bash
+npx tsx src/enqueue.ts
+```
+
+## Step 4: Build a worker with middleware
+
+Create `src/worker.ts`:
+
+```typescript
+// src/worker.ts
+import { OJSWorker } from '@openjobspec/sdk';
+
+const worker = new OJSWorker({
+  url: 'http://localhost:8080',
+  queues: ['default', 'reports'],
+  concurrency: 10,
+});
+
+// Middleware: log every job
+worker.use(async (ctx, next) => {
+  const start = Date.now();
+  console.log(`[START] ${ctx.job.type} (${ctx.job.id})`);
+
+  try {
+    await next(ctx);
+    console.log(`[DONE]  ${ctx.job.type} took ${Date.now() - start}ms`);
+  } catch (err) {
+    console.error(`[FAIL]  ${ctx.job.type} after ${Date.now() - start}ms:`, err);
+    throw err;
+  }
+});
+
+// Handler: email.send
+worker.handle('email.send', async (ctx) => {
+  const [to, template, options] = ctx.args as [string, string, { priority: string }?];
+  console.log(`  Sending "${template}" email to ${to} (priority: ${options?.priority ?? 'normal'})`);
+
+  // Simulate email sending
+  await new Promise((r) => setTimeout(r, 200));
+  return { delivered: true };
+});
+
+// Handler: report.generate
+worker.handle('report.generate', async (ctx) => {
+  const [reportId, format] = ctx.args as [string, string];
+  console.log(`  Generating ${format.toUpperCase()} report ${reportId}`);
+
+  // Simulate report generation
+  await new Promise((r) => setTimeout(r, 1000));
+  return { url: `https://reports.example.com/${reportId}.${format}` };
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => worker.stop());
+process.on('SIGTERM', () => worker.stop());
+
+await worker.start();
+console.log('Worker started on queues: default, reports');
+```
+
+Run the worker:
+
+```bash
+npx tsx src/worker.ts
+```
+
+## Step 5: Batch enqueue
+
+Enqueue multiple jobs in a single request:
+
+```typescript
+// src/batch.ts
+import { OJSClient } from '@openjobspec/sdk';
+
+const client = new OJSClient({ url: 'http://localhost:8080' });
+
+const jobs = await client.enqueueBatch([
+  { type: 'email.send', args: ['alice@example.com', 'welcome'] },
+  { type: 'email.send', args: ['bob@example.com', 'welcome'] },
+  { type: 'email.send', args: ['carol@example.com', 'welcome'] },
+]);
+
+console.log(`Enqueued ${jobs.length} jobs`);
+jobs.forEach((j) => console.log(`  ${j.id}: ${j.state}`));
+```
+
+## Step 6: Check job status
+
+```typescript
+// src/status.ts
+import { OJSClient } from '@openjobspec/sdk';
+
+const client = new OJSClient({ url: 'http://localhost:8080' });
+
+const jobId = process.argv[2];
+if (!jobId) {
+  console.error('Usage: npx tsx src/status.ts <job-id>');
+  process.exit(1);
+}
+
+const job = await client.getJob(jobId);
+console.log(`Job ${job.id}:`);
+console.log(`  Type:    ${job.type}`);
+console.log(`  State:   ${job.state}`);
+console.log(`  Attempt: ${job.attempt}`);
+if (job.result) console.log(`  Result:  ${JSON.stringify(job.result)}`);
+if (job.errors?.length) console.log(`  Errors:  ${job.errors.length} recorded`);
+```
+
+## What you built
+
+- **Type-safe job definitions** with TypeScript argument types
+- **Custom middleware** for logging and error tracking
+- **Multi-queue workers** processing different job types
+- **Batch enqueue** for efficient bulk operations
+- **Job status inspection** for monitoring
+
+## Next steps
+
+- Add [workflow orchestration](/tutorials/workflow-patterns/) to chain jobs together
+- Explore [unique jobs](/spec/unique-jobs/) for deduplication
+- Read the [SDK API reference](/reference/http-api/) for all available operations
