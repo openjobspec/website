@@ -1,0 +1,211 @@
+---
+title: "Tutorial: Your First Job in Go"
+description: Build a complete background job system with Go from scratch.
+---
+
+This tutorial walks you through building a background job system with the Go SDK. You will enqueue, process, and monitor a job using Go — no JavaScript required.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [Go](https://go.dev/dl/) 1.22 or later
+
+## Step 1: Start the OJS server
+
+If you haven't already, create a `docker-compose.yml`:
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+```
+
+```bash
+docker compose up -d
+```
+
+## Step 2: Initialize the project
+
+```bash
+mkdir ojs-go-tutorial && cd ojs-go-tutorial
+go mod init ojs-go-tutorial
+go get github.com/openjobspec/ojs-go-sdk
+```
+
+## Step 3: Enqueue a job
+
+Create `main.go`:
+
+```go
+// main.go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/openjobspec/ojs-go-sdk/client"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// Create a client pointing to the OJS server
+	c, err := client.New("http://localhost:8080")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Enqueue a job of type "email.send" on the "default" queue
+	job, err := c.Enqueue(ctx, "email.send",
+		client.WithArgs("user@example.com", "welcome"),
+		client.WithQueue("default"),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Enqueued job %s in state: %s\n", job.ID, job.State)
+}
+```
+
+Run it:
+
+```bash
+go run main.go
+```
+
+You should see:
+
+```
+Enqueued job 019461a8-1a2b-7c3d-8e4f-5a6b7c8d9e0f in state: available
+```
+
+## Step 4: Build a worker
+
+Create `worker/main.go`:
+
+```go
+// worker/main.go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/openjobspec/ojs-go-sdk/worker"
+)
+
+func main() {
+	// Create a worker that polls the "default" queue
+	w, err := worker.New("http://localhost:8080",
+		worker.WithQueues("default"),
+		worker.WithConcurrency(5),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Register a handler for "email.send" jobs
+	w.Handle("email.send", func(ctx worker.JobContext) error {
+		to := ctx.Args[0].(string)
+		template := ctx.Args[1].(string)
+		fmt.Printf("Sending %q email to %s\n", template, to)
+
+		// Your email logic goes here
+		return nil
+	})
+
+	// Graceful shutdown on Ctrl+C
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-stop
+		fmt.Println("\nShutting down worker...")
+		w.Stop(context.Background())
+	}()
+
+	fmt.Println("Worker started, waiting for jobs...")
+	if err := w.Start(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Run the worker:
+
+```bash
+go run worker/main.go
+```
+
+Output:
+
+```
+Worker started, waiting for jobs...
+Sending "welcome" email to user@example.com
+```
+
+## Step 5: Add retry logic
+
+Modify the enqueue call to add a retry policy:
+
+```go
+job, err := c.Enqueue(ctx, "email.send",
+	client.WithArgs("user@example.com", "welcome"),
+	client.WithQueue("default"),
+	client.WithRetry(client.RetryPolicy{
+		MaxAttempts: 5,
+		Backoff:     "exponential",
+	}),
+)
+```
+
+If the worker handler returns an error, the job transitions to `retryable` and is automatically rescheduled with exponential backoff.
+
+## Step 6: Add middleware
+
+Add logging and recovery middleware to the worker:
+
+```go
+import "github.com/openjobspec/ojs-go-sdk/middleware"
+
+w, err := worker.New("http://localhost:8080",
+	worker.WithQueues("default"),
+	worker.WithConcurrency(5),
+	worker.WithMiddleware(
+		middleware.Recovery(),
+		middleware.Logging(slog.Default()),
+	),
+)
+```
+
+This logs every job execution and recovers from panics in handlers.
+
+## What you built
+
+- A **Go client** that enqueues jobs to an OJS server
+- A **Go worker** that processes jobs with concurrency and graceful shutdown
+- **Retry policies** for automatic failure recovery
+- **Middleware** for cross-cutting concerns
+
+## Next steps
+
+- Add [workflow orchestration](/tutorials/workflow-patterns/) with chain, group, and batch
+- Explore [scheduled jobs](/spec/scheduling/) for delayed and cron execution
+- See the [Go SDK reference](https://pkg.go.dev/github.com/openjobspec/ojs-go-sdk) for the full API
