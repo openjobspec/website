@@ -38,6 +38,27 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Tutorials',
+          items: [
+            {
+              label: 'Your First Job (Go)',
+              slug: 'tutorials/your-first-job-go',
+            },
+            {
+              label: 'Your First Job (TypeScript)',
+              slug: 'tutorials/your-first-job-typescript',
+            },
+            {
+              label: 'Your First Job (Python)',
+              slug: 'tutorials/your-first-job-python',
+            },
+            {
+              label: 'Workflow Patterns',
+              slug: 'tutorials/workflow-patterns',
+            },
+          ],
+        },
+        {
           label: 'Guides',
           items: [
             {
