@@ -1,0 +1,101 @@
+---
+title: "Job Versioning"
+description: "Schema evolution, version routing, and safe rolling deployments"
+---
+
+The job versioning extension handles schema evolution and version-aware routing during rolling deployments. It enables producers and consumers running different code versions to coexist safely.
+
+:::caution
+This extension is experimental (v0.1.0). The API may change in future versions.
+:::
+
+## Version Identifier
+
+Jobs carry a `major.minor` version:
+
+```json
+{
+  "type": "email.send",
+  "args": ["user@example.com", "Welcome!"],
+  "version": "2.1"
+}
+```
+
+- **Minor** version changes are backward-compatible (added fields, relaxed constraints).
+- **Major** version changes are breaking (removed fields, changed semantics).
+
+## Version Routing
+
+Workers declare the version ranges they support during registration:
+
+```json
+{
+  "worker_id": "worker-abc-123",
+  "queues": ["default"],
+  "versions": {
+    "email.send": ">=1.0 <3.0",
+    "report.generate": ">=2.0 <3.0"
+  }
+}
+```
+
+The backend routes versioned jobs only to workers that declare compatibility. If no compatible worker is available, the job is held in the queue until one registers.
+
+## Schema Declaration
+
+Backends MAY maintain a schema registry for job types:
+
+```json
+{
+  "type": "email.send",
+  "version": "2.0",
+  "schema": {
+    "type": "array",
+    "items": [
+      { "type": "string", "description": "recipient email" },
+      { "type": "string", "description": "subject" },
+      { "type": "object", "description": "options", "properties": {
+        "template": { "type": "string" },
+        "priority": { "type": "string", "enum": ["low", "normal", "high"] }
+      }}
+    ]
+  }
+}
+```
+
+When a schema is registered, enqueued jobs can be validated against it before acceptance.
+
+## Migration Strategies
+
+### Expand and Contract (Recommended)
+
+1. **Expand**: Deploy new workers that handle both v1 and v2.
+2. **Migrate**: Update producers to send v2 jobs.
+3. **Contract**: Remove v1 support from workers after all v1 jobs have drained.
+
+### Parallel Workers
+
+Run v1 and v2 workers simultaneously. The backend routes each job to the appropriate version.
+
+## Canary Deployments
+
+Route a percentage of jobs to new-version workers for gradual rollout:
+
+```json
+{
+  "type": "email.send",
+  "version_routing": {
+    "2.0": 90,
+    "3.0": 10
+  }
+}
+```
+
+Auto-rollback: if the error rate for the canary version exceeds a threshold, routing reverts to 100% on the stable version.
+
+## Conformance
+
+Implementations MUST:
+- Parse the `version` field on job envelopes
+- Route versioned jobs only to workers declaring compatibility
+- Hold jobs when no compatible worker is available (do not discard)

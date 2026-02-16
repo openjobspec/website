@@ -1,0 +1,108 @@
+---
+title: "Multi-Tenancy"
+description: "Tenant isolation models, resource limits, and noisy neighbor prevention"
+---
+
+The multi-tenancy extension enables tenant-isolated job processing for SaaS deployments. It defines how tenants are identified, how resources are isolated, and how fairness is maintained across tenants.
+
+:::caution
+This extension is experimental (v0.1.0). The API may change in future versions.
+:::
+
+## Tenant Identification
+
+Tenants are identified via metadata or HTTP headers:
+
+```json
+{
+  "type": "report.generate",
+  "args": ["q1-2026"],
+  "meta": {
+    "tenant_id": "tenant_acme"
+  }
+}
+```
+
+Or via request header:
+
+```bash
+POST /ojs/v1/jobs
+X-OJS-Tenant: tenant_acme
+```
+
+The backend extracts the tenant ID and associates it with the job for the remainder of its lifecycle.
+
+## Isolation Models
+
+### Namespace Isolation
+
+Separate queues and workers per tenant:
+
+```
+tenant_acme.default → workers for acme
+tenant_beta.default → workers for beta
+```
+
+Strongest isolation. No shared resources. Higher operational overhead.
+
+### Shared Queue with Tenant Tags
+
+All tenants share queues. Jobs are tagged with `tenant_id` and fairness is enforced at dispatch time:
+
+```
+default queue → [job(acme), job(beta), job(acme), job(acme)]
+               ↓ fair dispatch
+               worker processes: acme, beta, acme, acme (interleaved)
+```
+
+Simplest to operate. Fairness depends on scheduling strategy.
+
+### Hybrid Sharded Queues (Recommended)
+
+Per-tenant sub-queues within a shared infrastructure. Workers consume from all sub-queues using round-robin:
+
+```
+default.tenant_acme → shared worker pool (round-robin)
+default.tenant_beta →
+```
+
+Combines isolation benefits with operational simplicity.
+
+## Per-Tenant Resource Limits
+
+| Resource | Description |
+|----------|-------------|
+| `concurrency` | Max simultaneous active jobs per tenant |
+| `enqueue_rate` | Max jobs per second per tenant |
+| `queue_depth` | Max queued jobs per tenant |
+| `scheduled_jobs` | Max scheduled jobs per tenant |
+
+```json
+{
+  "tenant_id": "tenant_acme",
+  "limits": {
+    "concurrency": 50,
+    "enqueue_rate": 100,
+    "queue_depth": 10000,
+    "scheduled_jobs": 1000
+  }
+}
+```
+
+When a limit is exceeded, the backend returns 429 with tenant-specific rate limit information.
+
+## Noisy Neighbor Prevention
+
+Backends SHOULD detect and mitigate noisy neighbors—tenants that consume disproportionate resources:
+
+1. **Detection**: Monitor per-tenant throughput, error rates, and resource consumption.
+2. **Throttling**: Automatically reduce a noisy tenant's effective rate limit.
+3. **Alerting**: Emit events when a tenant approaches or exceeds limits.
+
+## Interaction with Other Extensions
+
+- **Rate limiting**: Rate limits can be scoped by tenant using composite keys.
+- **Dead letter**: DLQ queries MUST be filterable by `tenant_id`.
+- **Backpressure**: Queue depth thresholds can be set per tenant.
+- **Observability**: Metrics SHOULD include a `tenant_id` dimension.
+- **Authorization**: Tenant scoping MUST be enforced at the authorization layer.

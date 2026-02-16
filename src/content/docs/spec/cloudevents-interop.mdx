@@ -1,0 +1,130 @@
+---
+title: "CloudEvents Interop"
+description: "Bidirectional mapping between OJS events and CloudEvents v1.0"
+---
+
+The CloudEvents interoperability extension defines bidirectional conversion between OJS events and CloudEvents v1.0, enabling integration with event-driven platforms like Knative, Azure Event Grid, AWS EventBridge, and Dapr.
+
+## Architectural Relationship
+
+Both OJS and CloudEvents use a layered architecture with a core envelope and protocol bindings. The interop maps OJS *events* (not jobs) to CloudEvents format.
+
+## OJS Event → CloudEvent
+
+| OJS Field | CloudEvent Attribute | Mapping |
+|-----------|---------------------|---------|
+| `type` | `type` | Prefixed: `org.openjobspec.job.completed` |
+| `id` | `id` | Direct mapping |
+| `time` | `time` | Direct mapping |
+| `source` | `source` | Backend URI |
+| `subject` | `subject` | Job ID |
+| `data` | `data` | Event data object |
+| — | `specversion` | Always `"1.0"` |
+| — | `datacontenttype` | `"application/json"` |
+
+Example output:
+
+```json
+{
+  "specversion": "1.0",
+  "type": "org.openjobspec.job.completed",
+  "source": "/ojs/backend/redis",
+  "id": "evt_01961234-5678-7abc",
+  "time": "2026-02-15T10:30:00Z",
+  "subject": "01961234-5678-7abc-def0-123456789abc",
+  "datacontenttype": "application/json",
+  "data": {
+    "job_type": "email.send",
+    "queue": "default",
+    "duration_ms": 245
+  }
+}
+```
+
+## CloudEvent → OJS Job Trigger
+
+CloudEvents from external systems can trigger OJS jobs:
+
+| CloudEvent Attribute | OJS Field | Mapping |
+|---------------------|-----------|---------|
+| `type` | `type` | Prefix stripped or mapped via table |
+| `data` | `args` | Pass-through, JSONPath extraction, or template |
+| `id` + `source` | Unique key | Deduplication on `id` + `source` |
+
+```json
+// Incoming CloudEvent
+{
+  "type": "com.stripe.payment.succeeded",
+  "data": { "payment_id": "pi_123", "amount": 4999 }
+}
+
+// Triggered OJS Job
+{
+  "type": "payment.fulfill",
+  "args": ["pi_123", 4999]
+}
+```
+
+## Event Bridge
+
+The Event Bridge subscribes to OJS events and publishes them as CloudEvents:
+
+```json
+{
+  "bridge": {
+    "source": "ojs",
+    "sink": "https://events.example.com/cloudevents",
+    "filters": ["job.completed", "job.failed"],
+    "format": "structured"
+  }
+}
+```
+
+Supports both structured and binary content modes for HTTP delivery.
+
+## Job Trigger
+
+The Job Trigger receives CloudEvents and converts them to OJS jobs:
+
+```json
+{
+  "trigger": {
+    "source": "https://events.example.com",
+    "type_mapping": {
+      "com.stripe.payment.succeeded": "payment.fulfill",
+      "com.github.push": "build.trigger"
+    },
+    "deduplication": true
+  }
+}
+```
+
+Deduplication uses the CloudEvent `id` + `source` combination to prevent duplicate job creation.
+
+## HTTP Binding
+
+Both structured and binary CloudEvents content modes are supported:
+
+**Structured mode:**
+```
+POST /ojs/v1/cloudevents
+Content-Type: application/cloudevents+json
+```
+
+**Binary mode:**
+```
+POST /ojs/v1/cloudevents
+Content-Type: application/json
+ce-type: com.stripe.payment.succeeded
+ce-source: https://api.stripe.com
+ce-id: evt_123
+```
+
+## Batch Conversion
+
+Batch CloudEvents format is supported for high-throughput scenarios:
+
+```
+POST /ojs/v1/cloudevents/batch
+Content-Type: application/cloudevents-batch+json
+```

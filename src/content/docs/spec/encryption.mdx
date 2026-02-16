@@ -1,0 +1,128 @@
+---
+title: "Encryption"
+description: "Client-side encryption codec for job payload protection"
+---
+
+The encryption extension defines a codec architecture for encrypting job payloads at the client before they reach the backend. This ensures sensitive job arguments are protected at rest and in transit through the backend infrastructure.
+
+:::caution
+This extension is experimental. The API may change in future versions.
+:::
+
+## Codec Interface
+
+The codec interface provides a composable encryption and compression pipeline:
+
+```
+encode(payload) → encrypted_payload
+decode(encrypted_payload) → payload
+```
+
+Codecs are applied in order during encode and reversed during decode.
+
+## What Gets Encrypted
+
+By default, only the `args` field is encrypted. Routing fields remain in plaintext so the backend can process the job:
+
+| Field | Encrypted | Reason |
+|-------|-----------|--------|
+| `args` | Yes | Contains application data |
+| `type` | No | Needed for routing to handlers |
+| `queue` | No | Needed for queue placement |
+| `id` | No | Needed for job tracking |
+| `priority` | No | Needed for ordering |
+| `scheduled_at` | No | Needed for scheduling |
+| `meta` | Partially | Codec metadata added; other meta encrypted optionally |
+
+## Encryption Algorithm
+
+OJS specifies AES-256-GCM as the required encryption algorithm:
+
+- **Algorithm**: AES-256-GCM (authenticated encryption with associated data)
+- **Key size**: 256 bits
+- **Nonce**: Random 96-bit (12-byte) nonce per job
+- **Wire format**: `[1 byte version][12 bytes nonce][N bytes ciphertext][16 bytes GCM tag]`
+
+## Encoded Job Envelope
+
+An encrypted job includes codec metadata:
+
+```json
+{
+  "id": "01961234-5678-7abc-def0-123456789abc",
+  "type": "payment.process",
+  "queue": "payments",
+  "args": "AQAAAAxr4nJk8f2...",
+  "ojs_encoded": true,
+  "meta": {
+    "ojs.codec.encodings": ["aes-256-gcm"],
+    "ojs.codec.key_id": "key-2026-02"
+  }
+}
+```
+
+| Marker | Description |
+|--------|-------------|
+| `ojs_encoded` | Boolean flag indicating the job has been encoded |
+| `meta.ojs.codec.encodings` | Ordered list of codecs applied |
+| `meta.ojs.codec.key_id` | Identifier of the encryption key used |
+
+## Codec Chaining
+
+Multiple codecs can be chained. For example, compress then encrypt:
+
+```
+encode: compress(zstd) → encrypt(aes-256-gcm)
+decode: decrypt(aes-256-gcm) → decompress(zstd)
+```
+
+```json
+{
+  "meta": {
+    "ojs.codec.encodings": ["zstd", "aes-256-gcm"]
+  }
+}
+```
+
+## Compression Codecs
+
+| Codec | Description |
+|-------|-------------|
+| `zstd` | Recommended. Best compression ratio for structured data. |
+| `gzip` | Widely supported. Good for interoperability. |
+| `snappy` | Fastest compression/decompression. Lower ratio. |
+
+## Key Management
+
+### Key Rotation
+
+Keys can be rotated without re-encrypting existing jobs:
+
+1. Add the new key to the key store.
+2. Set the new key as the default for encoding.
+3. Keep old keys available for decoding (referenced by `meta.ojs.codec.key_id`).
+4. Old keys can be retired after all jobs encrypted with them have completed.
+
+Key storage options: environment variables, secrets managers (AWS KMS, HashiCorp Vault), or mounted files.
+
+## Codec Server
+
+For tools that need to view encrypted job data (admin dashboards, CLIs), a standalone Codec Server provides HTTP-based decode:
+
+```bash
+POST /decode
+Authorization: Bearer <jwt>
+{
+  "args": "AQAAAAxr4nJk8f2...",
+  "meta": {
+    "ojs.codec.encodings": ["aes-256-gcm"],
+    "ojs.codec.key_id": "key-2026-02"
+  }
+}
+```
+
+The Codec Server requires authentication and enforces per-user access control.
+
+## Interaction with Unique Jobs
+
+Unique job deduplication keys are computed on the plaintext args **before** encryption. This is enforced by middleware ordering—the unique middleware runs before the encryption middleware in the enqueue chain.

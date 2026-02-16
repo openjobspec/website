@@ -1,0 +1,121 @@
+---
+title: "Webhooks"
+description: "Webhook subscriptions, signed delivery, and retry semantics"
+---
+
+Webhooks enable external systems to receive OJS events via HTTP callbacks. Subscribers register endpoints and receive signed event payloads with at-least-once delivery guarantees.
+
+## Subscription Model
+
+Register a webhook subscription:
+
+```bash
+POST /ojs/v1/webhooks
+{
+  "url": "https://api.example.com/ojs/events",
+  "events": ["job.completed", "job.failed", "job.discarded"],
+  "secret": "whsec_abc123def456...",
+  "metadata": {
+    "team": "payments"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | HTTPS endpoint to receive events |
+| `events` | string[] | Yes | Event types to subscribe to (supports wildcards: `job.*`) |
+| `secret` | string | Yes | Shared secret for HMAC signing |
+| `metadata` | object | No | Custom metadata attached to the subscription |
+
+## Delivery Payload
+
+Each webhook delivery includes the OJS event envelope with signing headers:
+
+```
+POST https://api.example.com/ojs/events
+Content-Type: application/json
+X-OJS-Signature: sha256=abc123...
+X-OJS-Timestamp: 1708000000
+X-OJS-Delivery-ID: del_01961234-5678-7abc
+
+{
+  "specversion": "1.0",
+  "id": "evt_01961234-...",
+  "type": "job.completed",
+  "source": "/ojs/backend/redis",
+  "time": "2026-02-15T10:30:00Z",
+  "subject": "01961234-5678-7abc-def0-123456789abc",
+  "data": { ... }
+}
+```
+
+## Signature Verification
+
+Webhooks are signed using HMAC-SHA256:
+
+```
+signature = HMAC-SHA256(secret, timestamp + "." + body)
+```
+
+Consumers MUST verify the signature and reject requests with timestamps more than 5 minutes old to prevent replay attacks.
+
+```javascript
+const crypto = require('crypto');
+
+function verifyWebhook(payload, signature, timestamp, secret) {
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${payload}`)
+    .digest('hex');
+  return crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(`sha256=${expected}`)
+  );
+}
+```
+
+## Delivery Semantics
+
+- **At-least-once**: Events may be delivered more than once. Consumers MUST be idempotent.
+- **Ordering**: NOT guaranteed. Consumers should use the `time` field for ordering.
+- **Idempotency**: The `X-OJS-Delivery-ID` is stable across retries for the same event.
+
+## Retry Policy
+
+Failed deliveries (non-2xx response or timeout) are retried with exponential backoff:
+
+| Attempt | Delay |
+|---------|-------|
+| 1 | Immediate |
+| 2 | 1 minute |
+| 3 | 5 minutes |
+| 4 | 30 minutes |
+| 5 | 2 hours |
+| 6 | 8 hours |
+| 7 | 16 hours |
+| 8 | 24 hours |
+
+After 8 failed attempts (approximately 41 hours), the delivery is abandoned and the event is logged.
+
+## Subscription Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/ojs/v1/webhooks` | Create a subscription |
+| `GET` | `/ojs/v1/webhooks` | List subscriptions |
+| `GET` | `/ojs/v1/webhooks/{id}` | Get subscription details |
+| `PATCH` | `/ojs/v1/webhooks/{id}` | Update a subscription |
+| `DELETE` | `/ojs/v1/webhooks/{id}` | Delete a subscription |
+| `POST` | `/ojs/v1/webhooks/{id}/test` | Send a test event |
+
+## Secret Rotation
+
+To rotate webhook secrets without downtime:
+
+1. Add a new secret to the subscription (both old and new are valid during transition)
+2. Update the consumer to verify against both secrets
+3. Remove the old secret from the subscription
+4. Update the consumer to verify only the new secret
+
+HTTPS is required for all webhook endpoints. HTTP URLs MUST be rejected.

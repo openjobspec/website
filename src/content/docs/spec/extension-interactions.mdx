@@ -1,0 +1,91 @@
+---
+title: "Extension Interactions"
+description: "Interaction matrix, middleware ordering, and multi-extension coordination"
+---
+
+The extension interactions specification defines how OJS extensions interact when multiple extensions are enabled simultaneously. It identifies conflicts, coordination requirements, and canonical ordering.
+
+## Interaction Classification
+
+| Symbol | Meaning |
+|--------|---------|
+| ✅ | Compatible — No special handling needed |
+| ⚙️ | Coordination Required — Extensions work together but need specific ordering or configuration |
+| ⚠️ | Conflict Potential — Extensions can conflict; specific rules apply |
+| ➖ | Independent — Extensions do not interact |
+
+## Critical Interactions
+
+### Encryption + Unique Jobs ⚠️
+
+Unique key computation MUST happen on plaintext args **before** encryption. If encryption runs first, two identical jobs would produce different ciphertext and bypass deduplication.
+
+**Resolution**: Middleware chain ordering ensures unique middleware runs before encryption middleware.
+
+### Encryption + Observability ⚙️
+
+Span attributes MUST NOT include encrypted `args`. The Codec Server provides authorized decryption for tools that need visibility.
+
+### Multi-Tenancy + Rate Limiting ⚙️
+
+Rate limits SHOULD be partitioned by tenant. A composite key `{tenant_id}:{rate_limit_key}` prevents one tenant's rate limit from affecting another.
+
+### Multi-Tenancy + Dead Letter ⚠️
+
+DLQ queries MUST be filtered by `tenant_id`. A tenant MUST NOT be able to view or retry another tenant's dead letter jobs.
+
+### Retry + Rate Limiting ⚙️
+
+Both retried and new jobs count against rate limits. Backends MAY prioritize retried jobs over new jobs within the rate limit budget.
+
+### Retry + Dead Letter ⚙️
+
+Jobs move to the DLQ only after all retries are exhausted. Events are emitted in order: `job.failed` → `job.retrying` (for each retry) → `job.discarded` or `job.dead_lettered`.
+
+### Workflows + Graceful Shutdown ⚙️
+
+On restart after shutdown, workflows resume from the last completed step. In-progress steps are retried.
+
+### Workflows + Job Versioning ⚙️
+
+Each workflow step can have its own version. Transformations between versions are supported at step boundaries.
+
+### Cron + Unique Jobs ⚠️
+
+The cron overlap policy is evaluated **before** unique job conflict policy. If the cron trigger is skipped due to overlap policy, the unique job check is never reached.
+
+## Canonical Middleware Ordering
+
+When multiple extensions contribute middleware, they MUST be ordered consistently:
+
+### Enqueue Chain
+
+```
+1. Trace context injection
+2. Authentication / authorization
+3. Input validation
+4. Unique job check
+5. Rate limit check
+6. Encryption
+7. Backend submission
+```
+
+### Execution Chain
+
+```
+1. Trace context extraction
+2. Logging
+3. Metrics
+4. Timeout enforcement
+5. Decryption
+6. Handler execution
+```
+
+## Conformance
+
+Implementations supporting multiple extensions MUST:
+- Apply middleware in the canonical order
+- Compute unique keys before encryption
+- Scope tenant-aware extensions by `tenant_id`
+- Emit events in the correct order for retry → DLQ transitions
+- Resume workflows from last completed step after restart

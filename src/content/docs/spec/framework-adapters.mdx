@@ -1,0 +1,141 @@
+---
+title: "Framework Adapters"
+description: "Transactional enqueue, outbox pattern, and web framework integration"
+---
+
+The framework adapters specification defines how OJS SDKs integrate with web frameworks (Rails, Django, Express, Spring, etc.) to provide transactional enqueue, request-scoped context, and lifecycle hooks.
+
+:::caution
+This extension is experimental. The API may change in future versions.
+:::
+
+## The Transactional Enqueue Problem
+
+A common pattern is to enqueue a job as part of a database transaction:
+
+```python
+# WRONG: Job may be enqueued but transaction rolled back
+with db.transaction():
+    order = Order.create(...)
+    ojs.enqueue("order.fulfill", [order.id])  # Sent immediately
+    raise SomeError()  # Transaction rolls back, but job is already queued!
+```
+
+## The Outbox Pattern
+
+Framework adapters solve this using the outbox pattern:
+
+1. During the transaction, jobs are written to an `ojs_outbox` table instead of sent to the backend.
+2. After the transaction commits, a background process reads the outbox and sends jobs to the backend.
+3. If the transaction rolls back, the outbox entries are rolled back too.
+
+```python
+# CORRECT: Job is only sent if transaction commits
+with db.transaction():
+    order = Order.create(...)
+    ojs.enqueue("order.fulfill", [order.id])  # Written to outbox table
+# After commit: outbox processor sends to OJS backend
+```
+
+## Adapter Interface
+
+```go
+type FrameworkAdapter interface {
+    // Enqueue within the current transaction context
+    Enqueue(ctx context.Context, job *Job) error
+    // Flush pending jobs (called after transaction commit)
+    Flush(ctx context.Context) error
+    // Discard pending jobs (called after transaction rollback)
+    Discard(ctx context.Context) error
+}
+```
+
+## Framework Integration
+
+### Request Context
+
+Adapters integrate with the web framework's request lifecycle:
+
+```ruby
+# Rails - jobs are flushed after each request
+class ApplicationController < ActionController::Base
+  around_action :ojs_request_scope
+
+  private
+  def ojs_request_scope
+    OJS.with_request_scope { yield }
+  end
+end
+```
+
+### Dependency Injection
+
+Adapters register OJS clients in the framework's DI container:
+
+```java
+// Spring Boot
+@Bean
+public OJSClient ojsClient() {
+    return OJS.client("http://localhost:8080");
+}
+```
+
+### Lifecycle Hooks
+
+| Hook | Description |
+|------|-------------|
+| `on_request_start` | Initialize request-scoped job buffer |
+| `on_request_end` | Flush buffered jobs |
+| `on_transaction_commit` | Send outbox entries to backend |
+| `on_transaction_rollback` | Discard outbox entries |
+| `on_app_shutdown` | Flush remaining outbox entries, shut down workers |
+
+## Language-Specific Examples
+
+### Rails
+
+```ruby
+# config/initializers/ojs.rb
+OJS.configure do |config|
+  config.backend_url = ENV["OJS_URL"]
+  config.adapter = :active_record  # Uses ActiveRecord outbox
+end
+
+# In a controller
+def create
+  ActiveRecord::Base.transaction do
+    @order = Order.create!(order_params)
+    OJS.enqueue("order.fulfill", [@order.id])
+  end
+end
+```
+
+### Django
+
+```python
+# In a view
+from ojs import enqueue
+from django.db import transaction
+
+@transaction.atomic
+def create_order(request):
+    order = Order.objects.create(...)
+    enqueue("order.fulfill", [order.id])  # Uses Django outbox
+    return JsonResponse({"id": order.id})
+```
+
+### Express
+
+```typescript
+app.post('/orders', async (req, res) => {
+  await db.transaction(async (tx) => {
+    const order = await tx.insert('orders', req.body);
+    await ojs.enqueue('order.fulfill', [order.id], { tx });
+  });
+  res.json({ success: true });
+});
+```
+
+## Interaction with Encryption
+
+When using the encryption extension with framework adapters, encryption MUST be applied before the job is inserted into the outbox table. This ensures the outbox does not contain plaintext sensitive data.

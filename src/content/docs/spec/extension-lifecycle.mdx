@@ -1,0 +1,87 @@
+---
+title: "Extension Lifecycle"
+description: "Extension tiers, promotion criteria, and governance model"
+---
+
+The extension lifecycle specification defines how OJS extensions progress from experimental ideas to stable core features. It establishes governance, versioning, and compatibility rules for the extension ecosystem.
+
+## Extension Tiers
+
+| Tier | Stability | Breaking Changes | Requirement |
+|------|-----------|-----------------|-------------|
+| Core | Stable | Major version only | Required at specific conformance levels |
+| Official | Stable | Deprecation cycle required | Opt-in, documented |
+| Experimental | Unstable | May break at any time | Opt-in, marked with warning |
+
+## Extension Identification
+
+Extensions are identified by URN:
+
+| Tier | URN Pattern | Example |
+|------|-------------|---------|
+| Core | `urn:ojs:spec:{name}` | `urn:ojs:spec:retry` |
+| Official | `urn:ojs:ext:{name}` | `urn:ojs:ext:rate-limiting` |
+| Experimental | `urn:ojs:ext:experimental:{name}` | `urn:ojs:ext:experimental:multi-tenancy` |
+| Custom | `urn:ojs:ext:x:{vendor}:{name}` | `urn:ojs:ext:x:acme:billing` |
+
+## Promotion Criteria
+
+### Experimental → Official
+
+1. Two or more independent implementations
+2. Conformance tests written and passing
+3. Eight-week community review period
+4. Four-week stability period (no breaking changes)
+5. Working group approval
+
+### Official → Core
+
+1. 80%+ adoption across known backends
+2. Six or more months of production use
+3. Consensus approval from maintainers
+4. Backward-compatible integration with core spec
+
+## Manifest Declaration
+
+Backends declare supported extensions in their manifest:
+
+```json
+{
+  "specversion": "1.0.0-rc.1",
+  "extensions": [
+    { "name": "retry", "uri": "urn:ojs:spec:retry", "version": "1.0.0" },
+    { "name": "rate-limiting", "uri": "urn:ojs:ext:rate-limiting", "version": "1.0.0" },
+    { "name": "multi-tenancy", "uri": "urn:ojs:ext:experimental:multi-tenancy", "version": "0.1.0" }
+  ]
+}
+```
+
+## SDK Negotiation
+
+SDKs discover backend capabilities via the manifest and enable features conditionally:
+
+```go
+client, _ := ojs.NewClient("http://localhost:8080")
+if client.Supports("rate-limiting") {
+    // Use rate limiting features
+}
+```
+
+## Extension Requirement Headers
+
+Clients can require specific extensions, failing fast if the backend doesn't support them:
+
+```
+POST /ojs/v1/jobs
+OJS-Requires-Extension: rate-limiting, unique-jobs
+```
+
+If the backend does not support a required extension, it returns 501 with the missing extension name.
+
+## Community Process
+
+1. **RFC proposal**: Submit an RFC with the extension design.
+2. **Prototype**: Build a working prototype in at least one language.
+3. **Review**: Working group review and feedback.
+4. **Experimental release**: Publish as experimental with stability warnings.
+5. **Promotion**: Meet promotion criteria for advancement.
