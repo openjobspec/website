@@ -1,0 +1,104 @@
+---
+title: "Events"
+description: "Standard event vocabulary for observable job lifecycle"
+---
+
+OJS defines a standard event vocabulary that enables monitoring, auditing, and reactive automation. Events are emitted by the backend as jobs progress through their lifecycle.
+
+The event format is inspired by CloudEvents, providing a consistent envelope that works across delivery mechanisms (Pub/Sub, LISTEN/NOTIFY, webhooks, WebSocket, gRPC streaming).
+
+## Event Envelope
+
+Every OJS event follows this structure:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "evt_01961234-5678-7abc-def0-123456789abc",
+  "type": "job.completed",
+  "source": "/ojs/backend/redis",
+  "time": "2026-02-15T10:30:00Z",
+  "subject": "01961234-5678-7abc-def0-123456789abc",
+  "data": {
+    "job_id": "01961234-5678-7abc-def0-123456789abc",
+    "job_type": "email.send",
+    "queue": "default",
+    "attempt": 1,
+    "duration_ms": 245
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `specversion` | string | Event format version (`"1.0"`) |
+| `id` | string | Unique event identifier |
+| `type` | string | Event type (dot-namespaced) |
+| `source` | string | Backend identifier URI |
+| `time` | string | RFC 3339 timestamp in UTC |
+| `subject` | string | Job ID this event relates to |
+| `data` | object | Event-specific payload |
+
+## Job Events
+
+| Event Type | Trigger | Data Fields |
+|------------|---------|-------------|
+| `job.enqueued` | Job submitted to queue | `job_id`, `job_type`, `queue`, `priority` |
+| `job.started` | Worker begins processing | `job_id`, `job_type`, `queue`, `attempt`, `worker_id` |
+| `job.completed` | Handler returns success | `job_id`, `job_type`, `queue`, `attempt`, `duration_ms` |
+| `job.failed` | Handler returns error | `job_id`, `job_type`, `queue`, `attempt`, `error`, `duration_ms` |
+| `job.retrying` | Job scheduled for retry | `job_id`, `job_type`, `queue`, `attempt`, `next_attempt_at`, `delay_ms` |
+| `job.discarded` | Retries exhausted, discarded | `job_id`, `job_type`, `queue`, `attempt`, `error` |
+| `job.cancelled` | Job cancelled by client | `job_id`, `job_type`, `queue`, `cancelled_by` |
+| `job.scheduled` | Delayed job enqueued | `job_id`, `job_type`, `queue`, `scheduled_at` |
+
+## Worker Events
+
+| Event Type | Trigger | Data Fields |
+|------------|---------|-------------|
+| `worker.registered` | Worker connects to backend | `worker_id`, `hostname`, `queues`, `concurrency` |
+| `worker.heartbeat` | Periodic heartbeat | `worker_id`, `active_jobs`, `state` |
+| `worker.quiet` | Worker entering quiet mode | `worker_id` |
+| `worker.terminated` | Worker shutting down | `worker_id`, `reason` |
+
+## Queue Events
+
+| Event Type | Trigger | Data Fields |
+|------------|---------|-------------|
+| `queue.paused` | Queue paused | `queue`, `paused_by` |
+| `queue.resumed` | Queue resumed | `queue`, `resumed_by` |
+
+## Workflow Events
+
+| Event Type | Trigger | Data Fields |
+|------------|---------|-------------|
+| `workflow.started` | Workflow begins | `workflow_id`, `workflow_type`, `total_steps` |
+| `workflow.step_completed` | Workflow step finishes | `workflow_id`, `step`, `total_steps` |
+| `workflow.completed` | All steps complete | `workflow_id`, `duration_ms` |
+| `workflow.failed` | Workflow step fails terminally | `workflow_id`, `step`, `error` |
+
+## Cron Events
+
+| Event Type | Trigger | Data Fields |
+|------------|---------|-------------|
+| `cron.triggered` | Cron schedule fires | `cron_name`, `job_id`, `next_at` |
+| `cron.skipped` | Overlap policy prevents execution | `cron_name`, `reason`, `next_at` |
+
+## Delivery Mechanisms
+
+OJS events can be consumed through multiple channels:
+
+| Mechanism | Description | Use Case |
+|-----------|-------------|----------|
+| Redis Pub/Sub | Subscribe to `ojs.events.*` channels | Real-time monitoring |
+| PostgreSQL LISTEN/NOTIFY | Listen on `ojs_events` channel | Existing Postgres infrastructure |
+| NATS subjects | Subscribe to `ojs.events.>` | NATS-native consumers |
+| Kafka topics | Consume from `ojs.events` topic | Event streaming pipelines |
+| WebSocket | Connect to `/ojs/v1/events/ws` | Browser-based dashboards |
+| Webhooks | Register HTTP callback endpoints | External system integration |
+
+## Conformance
+
+- **Level 0**: Implementations MAY emit events.
+- **Level 1**: Implementations SHOULD emit job lifecycle events (`job.enqueued`, `job.started`, `job.completed`, `job.failed`).
+- **Level 2+**: Implementations SHOULD emit scheduling and workflow events.

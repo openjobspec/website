@@ -1,0 +1,110 @@
+---
+title: "Dead Letter Queue"
+description: "Dead letter queue management, retention, and manual retry"
+---
+
+The dead letter queue (DLQ) captures jobs that have permanently failed, providing a safety net for investigation and manual recovery. Jobs enter the DLQ when retries are exhausted, a handler explicitly discards them, or a non-retryable error occurs.
+
+## Entry Conditions
+
+A job moves to the dead letter queue when:
+
+1. **Retry exhaustion** — All retry attempts are consumed and `on_exhaustion` is `"dead_letter"`.
+2. **Handler discard** — The handler returns a `DEAD_LETTER` response code, skipping remaining retries.
+3. **Non-retryable error** — The error type matches a `non_retryable_errors` pattern and `on_exhaustion` is `"dead_letter"`.
+
+Jobs with `on_exhaustion: "discard"` transition to the `discarded` state instead and are not placed in the DLQ.
+
+## Retention Policies
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_age` | string | `"P180D"` | ISO 8601 duration. Jobs older than this are pruned. |
+| `max_count` | integer | `10000` | Maximum number of dead letter jobs. Oldest are pruned first. |
+
+When both limits apply, the more restrictive takes effect. Backends MUST enforce at least one retention policy.
+
+## Manual Retry
+
+Individual dead letter jobs can be retried, returning them to the `available` state with a fresh attempt counter:
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/dead-letter/01961234-5678-7abc/retry
+```
+
+Retrying a dead letter job optionally allows modifications:
+
+```json
+{
+  "retry": {
+    "max_attempts": 5
+  },
+  "priority": 0,
+  "queue": "high-priority"
+}
+```
+
+### Bulk Retry
+
+Multiple dead letter jobs can be retried at once:
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/dead-letter/retry \
+  -H "Content-Type: application/json" \
+  -d '{"filter": {"job_type": "email.send", "queue": "default"}}'
+```
+
+## Automatic Replay
+
+Backends MAY support automatic replay rules that re-enqueue dead letter jobs matching specific criteria:
+
+```json
+{
+  "filter": {
+    "job_type": "payment.*",
+    "error_type": "connection_timeout"
+  },
+  "max_replays": 3,
+  "delay": "PT5M"
+}
+```
+
+Replay tracking prevents infinite replay loops. Each replayed job records its replay count, and jobs exceeding `max_replays` remain in the DLQ.
+
+## Inspection and Search
+
+Dead letter jobs can be filtered by:
+
+| Filter | Description |
+|--------|-------------|
+| `queue` | Original queue name |
+| `job_type` | Job type (exact or prefix match) |
+| `error_type` | Error type that caused the dead letter |
+| `since` / `until` | Time range of entry into DLQ |
+| `args` | Content-based search within job arguments |
+
+```bash
+# List dead letter jobs for a specific queue
+curl "http://localhost:8080/ojs/v1/dead-letter?queue=payments&limit=20"
+
+# Filter by error type
+curl "http://localhost:8080/ojs/v1/dead-letter?error_type=connection_timeout"
+```
+
+## Pruning Strategy
+
+Backends MUST periodically remove expired dead letter jobs. The pruning strategy options are:
+
+- **Delete** — Permanently remove expired jobs (default).
+- **Archive** — Move expired jobs to cold storage before deletion (for compliance requirements).
+
+## HTTP Binding
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/ojs/v1/dead-letter` | List dead letter jobs (paginated) |
+| `GET` | `/ojs/v1/dead-letter/{id}` | Get a specific dead letter job |
+| `POST` | `/ojs/v1/dead-letter/{id}/retry` | Retry a single dead letter job |
+| `DELETE` | `/ojs/v1/dead-letter/{id}` | Delete a dead letter job |
+| `POST` | `/ojs/v1/dead-letter/retry` | Bulk retry with filters |
+| `DELETE` | `/ojs/v1/dead-letter` | Bulk delete with filters |

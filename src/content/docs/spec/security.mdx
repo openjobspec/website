@@ -1,0 +1,123 @@
+---
+title: "Security"
+description: "Transport security, authentication, authorization, and input validation"
+---
+
+OJS defines comprehensive security requirements covering transport encryption, authentication, authorization, input validation, and operational security practices.
+
+## Transport Security
+
+- **TLS 1.2+** is required for all production deployments.
+- **mTLS** is recommended for worker-to-backend communication.
+- Certificate validation MUST NOT be disabled in production.
+
+## Authentication
+
+OJS supports multiple authentication mechanisms across three roles:
+
+### Producer Authentication
+
+| Method | Description |
+|--------|-------------|
+| API Key | Bearer token with 256+ bits entropy |
+| JWT | Signed tokens with expiration and scope claims |
+| OAuth 2.0 | Client credentials flow for service-to-service |
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/jobs \
+  -H "Authorization: Bearer ojs_prod_abc123..." \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{"type":"email.send","args":["user@example.com"]}'
+```
+
+### Worker Authentication
+
+| Method | Description |
+|--------|-------------|
+| Shared secret | Pre-shared key for worker registration |
+| mTLS | Client certificate authentication |
+| Token | JWT or API key per worker |
+
+### Admin Authentication
+
+Admin operations require separate credentials with elevated privileges. Multi-factor authentication is recommended for admin access.
+
+## Authorization
+
+### Queue-Level Access Control
+
+Access can be restricted per queue:
+
+| Permission | Description |
+|------------|-------------|
+| `enqueue` | Submit jobs to the queue |
+| `dequeue` | Fetch and process jobs from the queue |
+| `cancel` | Cancel jobs in the queue |
+| `inspect` | View job details and queue stats |
+| `admin` | Pause, resume, purge, configure the queue |
+
+### Role-Based Model
+
+| Role | Permissions |
+|------|-------------|
+| Producer | `enqueue`, `inspect` |
+| Worker | `dequeue`, `inspect` |
+| Operator | `enqueue`, `dequeue`, `cancel`, `inspect` |
+| Admin | All permissions |
+
+### Multi-Tenant Scoping
+
+In multi-tenant deployments, authorization is scoped by `tenant_id`. A producer authenticated as tenant A cannot enqueue jobs to tenant B's queues.
+
+## Input Validation
+
+Backends MUST validate all input:
+
+| Validation | Rule |
+|------------|------|
+| Job type | Allowlist pattern (`^[a-zA-Z0-9._-]{1,255}$`) |
+| Queue name | Allowlist pattern (`^[a-zA-Z0-9._-]{1,255}$`) |
+| Payload size | Reject above limit (default: 1 MiB) |
+| Meta keys | Pattern: `^[a-zA-Z0-9_.-]{1,128}$` |
+| Unknown attributes | Reject or ignore (configurable) |
+| JSON depth | Limit nesting depth to prevent stack overflow |
+
+## Payload Security
+
+- **Never** store sensitive data (passwords, tokens, PII) directly in job `args`. Use references to secure storage.
+- Backends SHOULD support the [Encryption](/spec/encryption/) extension for payload encryption at rest.
+- Job arguments MUST NOT be logged in full. Log job type and ID only.
+
+## DoS Protection
+
+| Protection | Default |
+|------------|---------|
+| Rate limiting | 1,000 jobs/sec per client |
+| Queue depth limit | Configurable per queue |
+| Payload size limit | 1 MiB |
+| Connection limit | 100 concurrent connections |
+| Request timeout | 30 seconds |
+
+## Audit Logging
+
+Security-relevant operations MUST be logged:
+
+```json
+{
+  "timestamp": "2026-02-15T10:30:00Z",
+  "event_type": "queue.purged",
+  "principal": "admin@example.com",
+  "source_ip": "10.0.1.50",
+  "outcome": "success",
+  "detail": { "queue": "payments", "jobs_purged": 150 }
+}
+```
+
+Audit logs MUST NOT include credentials, API keys, or sensitive job arguments.
+
+## Secrets Management
+
+- Credentials MUST NOT be stored in source code.
+- Use environment variables, secrets managers, or mounted files.
+- API keys MUST be stored hashed in the database.
+- Support zero-downtime key rotation with grace periods.

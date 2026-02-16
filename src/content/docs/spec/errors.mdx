@@ -1,0 +1,127 @@
+---
+title: "Error Catalog"
+description: "Structured error format, error categories, and retryability rules"
+---
+
+OJS defines a canonical error taxonomy with structured error responses, retryability semantics, and protocol-specific mappings. Every error returned by an OJS backend follows a consistent format.
+
+## Error Structure
+
+```json
+{
+  "code": "OJS_INVALID_REQUEST",
+  "message": "Job type is required",
+  "details": {
+    "field": "type",
+    "constraint": "required"
+  },
+  "retryable": false,
+  "doc_url": "https://openjobspec.org/reference/error-codes/#invalid-request"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | Yes | Machine-readable error code |
+| `message` | string | Yes | Human-readable description |
+| `details` | object | No | Additional context (field names, constraints, limits) |
+| `retryable` | boolean | Yes | Whether the client should retry |
+| `doc_url` | string | No | Link to documentation |
+
+## Error Categories
+
+### Validation Errors
+
+| Code | HTTP | Retryable | Description |
+|------|------|-----------|-------------|
+| `OJS_INVALID_REQUEST` | 400 | No | Malformed request body or missing required fields |
+| `OJS_INVALID_PAYLOAD` | 422 | No | Payload fails schema validation |
+| `OJS_SCHEMA_VALIDATION` | 422 | No | Job envelope fails JSON Schema validation |
+| `OJS_ENVELOPE_TOO_LARGE` | 413 | No | Payload exceeds size limit |
+
+### Conflict Errors
+
+| Code | HTTP | Retryable | Description |
+|------|------|-----------|-------------|
+| `OJS_DUPLICATE` | 409 | No | Unique job constraint violation |
+| `OJS_CONFLICT` | 409 | No | State transition conflict (e.g., cancelling an already completed job) |
+
+### Resource Errors
+
+| Code | HTTP | Retryable | Description |
+|------|------|-----------|-------------|
+| `OJS_NOT_FOUND` | 404 | No | Job or resource not found |
+| `OJS_QUEUE_PAUSED` | 503 | Yes | Target queue is paused |
+
+### Service Errors
+
+| Code | HTTP | Retryable | Description |
+|------|------|-----------|-------------|
+| `OJS_RATE_LIMITED` | 429 | Yes | Rate limit exceeded |
+| `OJS_BACKEND_ERROR` | 500 | Yes | Internal backend failure |
+| `OJS_TIMEOUT` | 504 | Yes | Backend operation timed out |
+| `OJS_UNSUPPORTED` | 501 | No | Operation not supported by this backend |
+
+## Retryability Rules
+
+The `retryable` field tells clients whether retrying the same request may succeed:
+
+- **Validation errors** are never retryable (the request itself is wrong).
+- **Conflict errors** are generally not retryable (the state needs to change first).
+- **Service errors** are retryable (the backend may recover).
+- **Rate limit errors** are retryable (after the `Retry-After` period).
+
+Handlers can override retryability in error responses. A `retryable` field in the response takes precedence over the category default.
+
+## Protocol Mapping
+
+| OJS Code | HTTP Status | gRPC Status | AMQP |
+|----------|-------------|-------------|------|
+| `OJS_INVALID_REQUEST` | 400 | `INVALID_ARGUMENT` | Channel error |
+| `OJS_NOT_FOUND` | 404 | `NOT_FOUND` | `basic.return` |
+| `OJS_DUPLICATE` | 409 | `ALREADY_EXISTS` | `basic.return` |
+| `OJS_RATE_LIMITED` | 429 | `RESOURCE_EXHAUSTED` | `basic.nack` |
+| `OJS_BACKEND_ERROR` | 500 | `INTERNAL` | Channel error |
+| `OJS_TIMEOUT` | 504 | `DEADLINE_EXCEEDED` | — |
+
+## Error History
+
+Backends SHOULD preserve recent errors for each job. The error history is available via the job info endpoint and is useful for debugging retry sequences.
+
+```json
+{
+  "id": "01961234-5678-7abc-def0-123456789abc",
+  "state": "retryable",
+  "attempt": 3,
+  "errors": [
+    {
+      "attempt": 1,
+      "type": "connection_timeout",
+      "message": "Failed to connect to payment gateway",
+      "occurred_at": "2026-02-15T10:30:00Z"
+    },
+    {
+      "attempt": 2,
+      "type": "connection_timeout",
+      "message": "Failed to connect to payment gateway",
+      "occurred_at": "2026-02-15T10:30:05Z"
+    }
+  ]
+}
+```
+
+Backends SHOULD retain at least the 10 most recent errors per job.
+
+## Custom Error Codes
+
+Applications can define custom error codes for domain-specific errors. Custom codes MUST NOT use the `OJS_` prefix, which is reserved for specification-defined codes.
+
+```json
+{
+  "code": "PAYMENT_CARD_DECLINED",
+  "message": "Card ending in 4242 was declined",
+  "retryable": false
+}
+```
+
+Custom codes follow the same structure and retryability rules as OJS-defined codes.

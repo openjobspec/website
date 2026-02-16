@@ -1,0 +1,83 @@
+---
+title: "Delivery Guarantees"
+description: "At-most-once, at-least-once, and effectively exactly-once delivery semantics"
+---
+
+OJS defines three delivery guarantee levels. The default and recommended level is at-least-once, which provides the best balance of reliability and simplicity.
+
+## Guarantee Levels
+
+| Level | Description | Data Loss Risk | Duplicate Risk |
+|-------|-------------|----------------|----------------|
+| At-most-once | Job may be lost but never duplicated | Yes | No |
+| At-least-once (default) | Job is never lost but may be delivered more than once | No | Yes |
+| Effectively exactly-once | At-least-once delivery with application-level deduplication | No | Mitigated |
+
+## At-Most-Once
+
+The backend acknowledges the enqueue before durably storing the job. If the backend crashes between acknowledgment and persistence, the job is lost.
+
+Use case: Fire-and-forget analytics events where occasional data loss is acceptable.
+
+## At-Least-Once (Default)
+
+The backend durably stores the job before acknowledging the enqueue. Combined with visibility timeouts and dead worker detection, this ensures every job is processed at least once.
+
+### Core Mechanisms
+
+1. **Durable enqueue (PUSH)**: The job is persisted before the backend returns 201 Created.
+2. **Visibility timeout**: Fetched jobs are reserved for a worker. If the worker does not ACK within the timeout, the job becomes available again.
+3. **Dead worker reaping**: The backend detects workers that miss heartbeats and recovers their jobs.
+
+### Duplicate Scenarios
+
+At-least-once delivery means duplicates are possible:
+
+| Scenario | Cause | Mitigation |
+|----------|-------|------------|
+| Worker crashes after processing but before ACK | Visibility timeout expires, job re-delivered | Idempotent handlers |
+| Network partition during ACK | Backend doesn't receive ACK, re-delivers | Idempotent handlers |
+| Backend failover | In-flight jobs replayed from replica | Idempotent handlers |
+
+## Effectively Exactly-Once
+
+True exactly-once delivery is impossible in distributed systems (per the Two Generals' Problem). OJS achieves *effectively* exactly-once by combining at-least-once delivery with application-level idempotency.
+
+### Idempotency Patterns
+
+- **Job ID as idempotency key**: Use the job's UUIDv7 ID to deduplicate at the application level.
+- **Unique jobs extension**: Prevent duplicate enqueue using the [unique jobs](/spec/unique-jobs/) extension.
+- **Idempotency tokens**: Store processed job IDs in your database and skip duplicates.
+
+```go
+func handlePayment(ctx context.Context, job *ojs.Job) error {
+    // Use job ID as idempotency key
+    if alreadyProcessed(job.ID) {
+        return nil // Skip duplicate
+    }
+    err := processPayment(job.Args)
+    if err != nil {
+        return err
+    }
+    markProcessed(job.ID)
+    return nil
+}
+```
+
+## Ordering
+
+OJS does not guarantee global ordering by default. Jobs may be processed out of order, especially when:
+
+- Multiple workers consume from the same queue
+- Jobs have different priorities
+- Retried jobs re-enter the queue
+
+FIFO ordering within a queue is an optional backend capability. Backends that support FIFO MUST document it in their manifest.
+
+## CAP Theorem Implications
+
+OJS chooses Availability + Partition tolerance (AP) over strong Consistency:
+
+- During network partitions, the backend continues accepting and processing jobs.
+- After partition recovery, duplicate detection and reconciliation may be needed.
+- This aligns with the at-least-once model where handlers are expected to be idempotent.

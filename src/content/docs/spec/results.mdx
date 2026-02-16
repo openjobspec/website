@@ -1,0 +1,129 @@
+---
+title: "Results"
+description: "Job result storage, retrieval, retention, and integration with workflows"
+---
+
+The results extension defines how job outputs are stored, retained, and retrieved. Results enable downstream consumers to read the output of completed jobs.
+
+## Storing Results
+
+Results are stored when a worker acknowledges a job with output data:
+
+```bash
+POST /ojs/v1/jobs/01961234-5678-7abc/ack
+{
+  "result": {
+    "report_url": "https://cdn.example.com/reports/q1-2026.pdf",
+    "pages": 42
+  }
+}
+```
+
+For failed jobs, the error is stored as the terminal result:
+
+```bash
+POST /ojs/v1/jobs/01961234-5678-7abc/fail
+{
+  "error": {
+    "type": "generation_failed",
+    "message": "Template not found: quarterly.html"
+  }
+}
+```
+
+## Result Retention
+
+Results have a configurable time-to-live (TTL):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `result_ttl` | integer | `604800` (7 days) | Seconds to retain the result after storage |
+
+```json
+{
+  "type": "report.generate",
+  "args": ["q1-2026"],
+  "result_ttl": 2592000
+}
+```
+
+Setting `result_ttl` to `0` means results are discarded immediately after acknowledgment. Setting it to `-1` means results are retained permanently.
+
+## Result Size Limits
+
+Backends SHOULD enforce a maximum result size (recommended: 1 MiB). For larger outputs, use the external reference pattern:
+
+```json
+{
+  "result": {
+    "__ojs_ref": "s3://my-bucket/results/01961234-5678-7abc.json",
+    "checksum": "sha256:abc123..."
+  }
+}
+```
+
+## Retrieving Results
+
+### Polling
+
+```bash
+GET /ojs/v1/jobs/01961234-5678-7abc
+```
+
+The response includes `result` when the job is in a terminal state:
+
+```json
+{
+  "id": "01961234-5678-7abc-def0-123456789abc",
+  "state": "completed",
+  "result": {
+    "report_url": "https://cdn.example.com/reports/q1-2026.pdf",
+    "pages": 42
+  },
+  "result_stored_at": "2026-02-15T10:30:45Z",
+  "result_expires_at": "2026-02-22T10:30:45Z"
+}
+```
+
+### Blocking Wait
+
+Backends MAY support blocking result retrieval with a timeout:
+
+```bash
+GET /ojs/v1/jobs/01961234-5678-7abc?wait=30
+```
+
+The server holds the connection open for up to 30 seconds, returning immediately when the result becomes available.
+
+### Server-Sent Events
+
+Backends MAY support SSE streaming for result notification:
+
+```bash
+GET /ojs/v1/jobs/01961234-5678-7abc/result/stream
+```
+
+## Integration with Workflows
+
+In workflow chains, each step's result is available to the next step via `parent_results`:
+
+```json
+{
+  "type": "chain",
+  "steps": [
+    { "type": "data.fetch", "args": ["source_123"] },
+    { "type": "data.transform", "args": [] },
+    { "type": "data.upload", "args": ["destination_456"] }
+  ]
+}
+```
+
+The `data.transform` handler receives the result of `data.fetch` in its context. This enables pipeline-style data processing without external coordination.
+
+## Result Metadata
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `result_stored_at` | string | RFC 3339 timestamp when result was stored |
+| `result_expires_at` | string | RFC 3339 timestamp when result will be pruned |
+| `result_size_bytes` | integer | Size of the stored result in bytes |

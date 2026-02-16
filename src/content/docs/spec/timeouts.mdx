@@ -1,0 +1,116 @@
+---
+title: "Timeouts"
+description: "Execution, total, enqueue TTL, grace period, and heartbeat timeout mechanisms"
+---
+
+OJS defines five timeout mechanisms that protect against runaway jobs, stalled workers, and unbounded queue wait times. Each addresses a different failure mode.
+
+## Timeout Types
+
+| Timeout | Default | Scope | Description |
+|---------|---------|-------|-------------|
+| Execution timeout | 1800s (30m) | Per attempt | Maximum time for a single execution attempt |
+| Total timeout | — | All attempts | Wall-clock limit from creation to completion |
+| Enqueue TTL | — | Pre-execution | Maximum time in a non-active state before discard |
+| Grace period | 30s | Per attempt | Time between soft timeout signal and forced termination |
+| Heartbeat timeout | 60s | Per attempt | Maximum interval between heartbeats before a job is considered stalled |
+
+## Execution Timeout
+
+The execution timeout limits how long a single attempt can run. When exceeded, the job transitions to `retryable` (if attempts remain) or `discarded` (if exhausted).
+
+```json
+{
+  "type": "report.generate",
+  "args": ["quarterly-2026-q1"],
+  "timeout": 3600
+}
+```
+
+Detection is server-side via visibility timeout expiry. Workers MAY also enforce the timeout locally for faster response.
+
+## Total Timeout
+
+The total timeout sets a wall-clock limit across all attempts, from job creation to completion. This prevents jobs from retrying indefinitely when individual attempts are short but numerous.
+
+```json
+{
+  "type": "payment.process",
+  "args": ["txn_abc123"],
+  "timeout": 300,
+  "total_timeout": 900,
+  "retry": { "max_attempts": 10 }
+}
+```
+
+Before scheduling a retry, the backend checks whether the next attempt would exceed the total timeout. If so, the job is discarded or dead-lettered instead of retried.
+
+## Enqueue TTL
+
+The enqueue TTL limits how long a job can wait before being processed. If a job has not started execution within this period, it is discarded with error type `enqueue_ttl_expired`.
+
+```json
+{
+  "type": "notification.push",
+  "args": ["user_123", "Flash sale ending!"],
+  "enqueue_ttl": 300
+}
+```
+
+Use case: time-sensitive notifications where delivery after a delay is worse than no delivery.
+
+## Grace Period
+
+The grace period is the time between a soft timeout signal and forced termination. It gives the worker a chance to save progress or clean up resources.
+
+```json
+{
+  "type": "video.transcode",
+  "args": ["video_abc"],
+  "timeout": 7200,
+  "grace_period": 60
+}
+```
+
+The default grace period (30s) aligns with Kubernetes shutdown semantics.
+
+## Heartbeat Timeout
+
+The heartbeat timeout detects stalled jobs—jobs where the worker process is alive but the handler is stuck (deadlock, infinite loop, blocked I/O).
+
+```json
+{
+  "type": "data.import",
+  "args": ["dataset_xyz"],
+  "heartbeat_timeout": 120
+}
+```
+
+Progress updates (`PUT /ojs/v1/jobs/{id}/progress`) reset the heartbeat clock. Long-running jobs that report progress regularly will not trigger the heartbeat timeout.
+
+## Timeout Actions
+
+When a timeout fires:
+
+| Timeout Type | Error Type | Next State |
+|-------------|------------|------------|
+| Execution | `timeout` | `retryable` or `discarded` |
+| Total | `total_timeout` | `discarded` |
+| Enqueue TTL | `enqueue_ttl_expired` | `discarded` |
+| Heartbeat | `stalled` | `retryable` or `discarded` |
+
+## Timeout Events
+
+| Event | Description |
+|-------|-------------|
+| `job.timeout` | Execution timeout fired |
+| `job.stalled` | Heartbeat timeout fired |
+| `job.ttl_expired` | Enqueue TTL expired |
+| `job.total_timeout` | Total timeout reached |
+
+## Interaction with Other Extensions
+
+- **Retry**: Before scheduling a retry, the backend checks if the next attempt would exceed `total_timeout`.
+- **Workflows**: If a workflow step times out, the workflow halts (chain) or records the step failure (group/batch).
+- **Progress**: Progress updates reset the heartbeat clock, allowing long-running jobs to avoid stall detection.
+- **Graceful shutdown**: On shutdown, the error type is `"shutdown"` rather than `"timeout"`, distinguishing planned stops from timeouts.

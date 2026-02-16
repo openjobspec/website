@@ -1,0 +1,122 @@
+---
+title: "Middleware"
+description: "Enqueue and execution middleware chains for cross-cutting concerns"
+---
+
+Middleware provides a composable way to add cross-cutting behavior—logging, metrics, tracing, timeouts, error reporting—to job enqueue and execution without modifying handler or client code.
+
+OJS adopts Sidekiq's proven two-chain approach: one chain for enqueue (client-side) and one for execution (worker-side), each with distinct semantics.
+
+## Two Middleware Chains
+
+### Enqueue Middleware (Client-side)
+
+Enqueue middleware intercepts jobs between the client calling `enqueue()` and the job being submitted to the backend. It uses a linear pass-through model.
+
+Each middleware receives the job envelope and a `next` function. It can:
+
+- **Pass** the job through by calling `next(job)` (optionally modifying the envelope first)
+- **Drop** the job silently by not calling `next`
+- **Error** to reject the enqueue with an error
+
+```json
+{
+  "type": "email.send",
+  "args": ["user@example.com", "Welcome!"],
+  "meta": {
+    "traceparent": "00-abc123-def456-01"
+  }
+}
+```
+
+Typical enqueue middleware: trace context injection, validation, rate limit checks, encryption, deduplication pre-checks.
+
+### Execution Middleware (Worker-side)
+
+Execution middleware wraps the job handler using a nested "onion" model. Each middleware can run logic before the handler, after the handler, or around exceptions.
+
+```
+┌─────────────────────────────────────┐
+│ Logging middleware                  │
+│  ┌──────────────────────────────┐   │
+│  │ Metrics middleware           │   │
+│  │  ┌───────────────────────┐   │   │
+│  │  │ Timeout middleware    │   │   │
+│  │  │  ┌────────────────┐   │   │   │
+│  │  │  │  Job Handler   │   │   │   │
+│  │  │  └────────────────┘   │   │   │
+│  │  └───────────────────────┘   │   │
+│  └──────────────────────────────┘   │
+└─────────────────────────────────────┘
+```
+
+Typical execution middleware: structured logging, duration metrics, timeout enforcement, error reporting, trace context propagation.
+
+## Chain Operations
+
+Middleware chains support ordered manipulation:
+
+| Operation | Description |
+|-----------|-------------|
+| `add(middleware)` | Append to end of chain |
+| `prepend(middleware)` | Insert at beginning of chain |
+| `insert_before(target, middleware)` | Insert before a named middleware |
+| `insert_after(target, middleware)` | Insert after a named middleware |
+| `remove(name)` | Remove a named middleware |
+
+Each middleware has a unique name for identification in chain operations.
+
+## Built-in Middleware
+
+Implementations SHOULD provide these built-in middleware:
+
+| Middleware | Chain | Description |
+|------------|-------|-------------|
+| Logging | Execution | Structured log entry/exit with duration |
+| Metrics | Execution | Counter and histogram recording |
+| Timeout | Execution | Per-job execution timeout enforcement |
+| Error reporting | Execution | Exception capture and reporting |
+| Trace context | Both | W3C Trace Context propagation |
+
+## Error Handling
+
+In execution middleware:
+
+- If a middleware raises an exception before calling `next`, the inner middleware and handler do not execute. The error propagates outward.
+- If the handler raises an exception, outer middleware can catch it (for logging/metrics) and either re-raise or suppress it.
+- If a middleware suppresses a handler exception, the job is considered successful (ACK). This is a deliberate design choice—middleware is allowed to alter outcome semantics.
+
+## Middleware Interface
+
+The middleware interface is language-specific but follows a canonical pattern:
+
+```go
+// Go
+type ExecutionMiddleware func(ctx context.Context, job *Job, next HandlerFunc) error
+
+// Usage
+func loggingMiddleware(ctx context.Context, job *Job, next HandlerFunc) error {
+    log.Info("starting", "job_id", job.ID, "type", job.Type)
+    err := next(ctx, job)
+    log.Info("finished", "job_id", job.ID, "duration", time.Since(start))
+    return err
+}
+```
+
+```typescript
+// TypeScript
+type ExecutionMiddleware = (job: Job, next: () => Promise<void>) => Promise<void>;
+
+// Usage
+const loggingMiddleware: ExecutionMiddleware = async (job, next) => {
+  console.log(`starting job ${job.id}`);
+  await next();
+  console.log(`finished job ${job.id}`);
+};
+```
+
+## Interaction with Other Extensions
+
+- **Encryption**: Encryption middleware runs in the enqueue chain. It MUST run after unique key computation to ensure deduplication works on plaintext.
+- **Observability**: Trace context middleware runs in both chains, injecting `meta.traceparent` on enqueue and extracting it on execution.
+- **Rate limiting**: Rate limit checks run in the enqueue chain as middleware, before the job reaches the backend.

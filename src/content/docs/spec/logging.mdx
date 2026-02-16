@@ -1,0 +1,107 @@
+---
+title: "Structured Logging"
+description: "Log format, severity levels, correlation, and sensitive data handling"
+---
+
+OJS defines structured logging conventions for backends, workers, and SDKs. Structured JSON logs enable consistent querying, correlation with traces, and integration with log aggregation platforms.
+
+## Log Format
+
+Every log entry MUST include:
+
+```json
+{
+  "timestamp": "2026-02-15T10:30:00.123Z",
+  "severity": "INFO",
+  "severity_number": 9,
+  "message": "job completed",
+  "component": "worker"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `timestamp` | string | Yes | RFC 3339 with milliseconds |
+| `severity` | string | Yes | Log level name |
+| `severity_number` | integer | Yes | OpenTelemetry severity number |
+| `message` | string | Yes | Human-readable message |
+| `component` | string | Yes | Source component (api, worker, scheduler, etc.) |
+
+## Severity Levels
+
+Aligned with OpenTelemetry Logs:
+
+| Level | Number | Description |
+|-------|--------|-------------|
+| TRACE | 1 | Detailed debugging (per-field, per-step) |
+| DEBUG | 5 | Diagnostic information |
+| INFO | 9 | Normal operational events |
+| WARN | 13 | Unexpected but handled conditions |
+| ERROR | 17 | Errors requiring attention |
+| FATAL | 21 | Unrecoverable errors |
+
+## Log Categories
+
+### Lifecycle Logs
+
+```json
+{"severity": "INFO", "message": "job enqueued", "job_id": "...", "job_type": "email.send", "queue": "default"}
+{"severity": "INFO", "message": "job started", "job_id": "...", "job_type": "email.send", "worker_id": "worker-1"}
+{"severity": "INFO", "message": "job completed", "job_id": "...", "duration_ms": 245}
+```
+
+### Error Logs
+
+```json
+{"severity": "ERROR", "message": "job failed", "job_id": "...", "error_type": "connection_timeout", "attempt": 2}
+```
+
+### Performance Logs
+
+```json
+{"severity": "WARN", "message": "slow job", "job_id": "...", "duration_ms": 15000, "threshold_ms": 10000}
+```
+
+## Correlation
+
+### Job ID Correlation
+
+All log entries related to a job SHOULD include `job_id` for filtering.
+
+### Distributed Tracing
+
+Include `trace_id` and `span_id` when available:
+
+```json
+{
+  "timestamp": "2026-02-15T10:30:00.123Z",
+  "severity": "INFO",
+  "message": "job completed",
+  "job_id": "01961234-5678-7abc-def0-123456789abc",
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "span_id": "b7ad6b7169203331"
+}
+```
+
+### Request Correlation
+
+HTTP API logs SHOULD include `request_id` for correlating request processing.
+
+## Sensitive Data Handling
+
+- **Never** log full `args` or `result` values. They may contain PII.
+- Log `job_type`, `job_id`, `queue`, and `attempt` only.
+- If args must be logged for debugging, use a configurable redaction filter.
+- API keys and credentials MUST never appear in logs.
+
+## Sampling
+
+For high-throughput deployments, log sampling reduces volume:
+
+| Strategy | Description |
+|----------|-------------|
+| Rate-based | Log 1 in N events |
+| Error-biased | Always log errors, sample successes |
+| Tail-based | Buffer logs; flush all if error occurs, sample if not |
+
+Error-biased sampling is recommended: always log errors and warnings, sample INFO-level logs at high volume.
