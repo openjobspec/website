@@ -1,0 +1,83 @@
+---
+title: "Priority"
+description: "Job priority model with ordering, dynamic updates, and starvation prevention"
+---
+
+The priority extension enables ordering jobs by importance. Lower numeric values indicate higher priority, following the convention used by operating system process scheduling.
+
+## Priority Model
+
+Priority is a non-negative integer on the job envelope. The default priority is 2 (normal).
+
+```json
+{
+  "type": "payment.process",
+  "args": ["txn_abc123"],
+  "priority": 0
+}
+```
+
+| Level | Name | Use Case |
+|-------|------|----------|
+| 0 | Critical | System alerts, security responses |
+| 1 | High | Payment processing, user-facing operations |
+| 2 | Normal (default) | Standard background jobs |
+| 3 | Low | Report generation, analytics |
+| 4 | Bulk | Data migration, batch imports |
+
+These names are informational. Any non-negative integer is valid as a priority value. Jobs with the same priority are processed in FIFO order.
+
+## Queue Consumption Strategies
+
+Backends support two strategies for consuming prioritized jobs:
+
+### Strict Priority
+
+Process all higher-priority jobs before any lower-priority jobs. Simple and predictable, but lower-priority jobs may starve under sustained high-priority load.
+
+### Weighted Priority
+
+Consume jobs proportionally across priority levels. For example, with weights `{0: 5, 1: 3, 2: 2}`, roughly 50% of capacity goes to critical jobs, 30% to high, and 20% to normal. This prevents starvation at the cost of some latency for critical jobs.
+
+The strategy is a backend configuration choice, not a per-job setting.
+
+## Dynamic Priority Updates
+
+Priority can be updated on jobs in the `available` or `scheduled` states:
+
+```bash
+curl -X PATCH http://localhost:8080/ojs/v1/jobs/01961234-5678-7abc \
+  -H "Content-Type: application/json" \
+  -d '{"priority": 0}'
+```
+
+Jobs in `active`, `completed`, `discarded`, or `cancelled` states cannot have their priority changed (409 Conflict).
+
+## Priority Aging
+
+To prevent starvation of low-priority jobs, backends MAY implement priority aging: a job's effective priority increases over time.
+
+```
+effective_priority = base_priority - floor(age_seconds / aging_interval)
+```
+
+With an aging interval of 60 seconds, a priority-4 job waiting 5 minutes would have an effective priority of -1 (higher than critical). This ensures all jobs are eventually processed.
+
+## Interaction with Other Extensions
+
+- **Rate limiting**: Rate limits take precedence over priority. A rate-limited queue processes jobs in priority order up to the rate limit.
+- **Workflows**: Workflow child jobs inherit the parent workflow's priority unless explicitly overridden.
+- **Unique jobs**: When a unique conflict occurs with `on_conflict: "replace"`, the new job's priority replaces the existing job's priority.
+- **Fair scheduling**: In weighted fair scheduling, priority ordering applies within each tenant's allocation.
+
+## HTTP Binding
+
+```bash
+# Enqueue with priority
+curl -X POST http://localhost:8080/ojs/v1/jobs \
+  -H "Content-Type: application/openjobspec+json" \
+  -d '{"type":"email.send","args":["user@example.com"],"priority":1}'
+
+# Get priority distribution
+curl http://localhost:8080/ojs/v1/queues/default/priority-stats
+```

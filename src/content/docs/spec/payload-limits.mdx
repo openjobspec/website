@@ -1,0 +1,95 @@
+---
+title: "Payload Limits"
+description: "Size limits, external references, compression, and capability declaration"
+---
+
+The payload limits specification defines size constraints for job envelopes and provides mechanisms for handling large payloads through external references and compression.
+
+## Size Limits
+
+| Component | Minimum Support | Recommended Support |
+|-----------|----------------|---------------------|
+| Job envelope | 1 MiB | 10 MiB |
+| `meta` field | 64 KiB | 64 KiB |
+| Queue name | 255 bytes | 255 bytes |
+| Job type | 255 bytes | 255 bytes |
+
+Backends declare their limits in the manifest:
+
+```json
+{
+  "limits": {
+    "max_job_size_bytes": 10485760,
+    "max_meta_size_bytes": 65536,
+    "max_queue_name_length": 255,
+    "max_type_length": 255
+  }
+}
+```
+
+## External Payload References
+
+For payloads exceeding the size limit, use an external reference instead of inline data:
+
+```json
+{
+  "type": "video.transcode",
+  "args": [
+    {
+      "__ojs_ref": "s3://my-bucket/inputs/video-abc.mp4",
+      "checksum": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 524288000
+    }
+  ]
+}
+```
+
+### Supported URI Schemes
+
+| Scheme | Description |
+|--------|-------------|
+| `s3://` | AWS S3 |
+| `gs://` | Google Cloud Storage |
+| `https://` | HTTPS URL (pre-signed or public) |
+| `file://` | Local filesystem (development only) |
+
+### Checksums
+
+When a checksum is provided, workers MUST verify the downloaded payload matches before processing. Mismatches produce a `checksum_mismatch` error.
+
+## Compression
+
+Backends MAY support compressed payloads via HTTP content encoding:
+
+```bash
+POST /ojs/v1/jobs
+Content-Type: application/openjobspec+json
+Content-Encoding: gzip
+```
+
+| Codec | Description |
+|-------|-------------|
+| `gzip` | Widely supported, moderate compression |
+| `zstd` | Recommended. Better ratio and speed than gzip |
+
+Backends declare supported compression codecs in the manifest.
+
+## Error Handling
+
+| Error | HTTP Status | Description |
+|-------|-------------|-------------|
+| `OJS_ENVELOPE_TOO_LARGE` | 413 | Payload exceeds the backend's size limit |
+| `OJS_CHECKSUM_MISMATCH` | 422 | External reference checksum does not match |
+
+The 413 response includes the limit:
+
+```json
+{
+  "code": "OJS_ENVELOPE_TOO_LARGE",
+  "message": "Job envelope exceeds maximum size",
+  "details": {
+    "size_bytes": 15728640,
+    "max_size_bytes": 10485760
+  }
+}
+```

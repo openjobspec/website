@@ -1,0 +1,130 @@
+---
+title: "Progress"
+description: "Real-time job progress reporting, checkpoints, and workflow aggregation"
+---
+
+The progress extension enables workers to report real-time progress updates during job execution. Clients can poll or stream progress for user-facing feedback.
+
+## Progress Model
+
+Progress supports two complementary representations:
+
+### Numeric Progress
+
+A float between 0.0 and 1.0, representing percentage completion:
+
+```bash
+PUT /ojs/v1/jobs/01961234-5678-7abc/progress
+{
+  "progress": 0.75
+}
+```
+
+Values outside the range are clamped. Progress SHOULD be monotonically increasing—backends MAY reject decreasing values.
+
+### Structured Progress
+
+An arbitrary JSON object for application-specific detail:
+
+```bash
+PUT /ojs/v1/jobs/01961234-5678-7abc/progress
+{
+  "progress": 0.6,
+  "detail": {
+    "phase": "uploading",
+    "files_processed": 120,
+    "files_total": 200,
+    "current_file": "report-q1.pdf"
+  }
+}
+```
+
+## Retrieving Progress
+
+### Polling
+
+```bash
+GET /ojs/v1/jobs/01961234-5678-7abc
+```
+
+```json
+{
+  "id": "01961234-5678-7abc-def0-123456789abc",
+  "state": "active",
+  "progress": 0.6,
+  "progress_detail": {
+    "phase": "uploading",
+    "files_processed": 120,
+    "files_total": 200
+  }
+}
+```
+
+### Server-Sent Events
+
+For real-time updates without polling:
+
+```bash
+GET /ojs/v1/jobs/01961234-5678-7abc/progress/stream
+```
+
+```
+event: progress
+data: {"progress": 0.6, "detail": {"phase": "uploading", "files_processed": 120}}
+
+event: progress
+data: {"progress": 0.8, "detail": {"phase": "uploading", "files_processed": 160}}
+
+event: complete
+data: {"progress": 1.0, "state": "completed"}
+```
+
+## Progress as Heartbeat
+
+Progress updates act as implicit heartbeats. Each progress update resets the heartbeat timeout clock, allowing long-running jobs to avoid stall detection without sending separate heartbeat calls.
+
+Backends SHOULD accept at least 1 progress update per second.
+
+## Checkpoints
+
+Progress updates can include checkpoint data for resumable jobs. If a job fails and is retried, the checkpoint is passed to the next attempt:
+
+```bash
+PUT /ojs/v1/jobs/01961234-5678-7abc/progress
+{
+  "progress": 0.5,
+  "checkpoint": {
+    "last_processed_id": 5000,
+    "batch_offset": 50
+  }
+}
+```
+
+On retry, the handler receives the last checkpoint and can resume from where it left off rather than restarting from the beginning.
+
+## Workflow Progress Aggregation
+
+For workflows, progress is computed from constituent steps:
+
+| Workflow Type | Aggregation |
+|---------------|-------------|
+| Chain | `completed_steps / total_steps` (current step progress interpolated) |
+| Group | Average of all step progresses |
+| Batch | `completed_steps / total_steps` |
+
+```bash
+GET /ojs/v1/workflows/wf_01961234-5678-7abc
+```
+
+```json
+{
+  "workflow_id": "wf_01961234-5678-7abc",
+  "type": "group",
+  "progress": 0.65,
+  "steps": [
+    { "job_id": "...", "progress": 1.0, "state": "completed" },
+    { "job_id": "...", "progress": 0.8, "state": "active" },
+    { "job_id": "...", "progress": 0.15, "state": "active" }
+  ]
+}
+```

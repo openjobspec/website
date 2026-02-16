@@ -1,0 +1,101 @@
+---
+title: "Queue Configuration"
+description: "Queue lifecycle, policies, capacity limits, and management"
+---
+
+Queue configuration defines how queues are created, configured, and managed throughout their lifecycle.
+
+## Queue States
+
+| State | Description |
+|-------|-------------|
+| `active` | Queue is accepting and delivering jobs |
+| `paused` | Queue accepts new jobs but does not deliver them to workers |
+| `draining` | Queue does not accept new jobs but delivers remaining jobs |
+| `deleted` | Queue is removed (with configurable behavior for remaining jobs) |
+
+## Queue Configuration
+
+```json
+{
+  "name": "payments",
+  "capacity": {
+    "max_depth": 100000,
+    "max_size_bytes": 104857600
+  },
+  "processing": {
+    "visibility_timeout": 1800,
+    "max_concurrency": 50
+  },
+  "retention": {
+    "completed_ttl": "P7D",
+    "failed_ttl": "P30D"
+  },
+  "dead_letter": {
+    "enabled": true,
+    "max_age": "P180D",
+    "max_count": 10000
+  },
+  "access": {
+    "producers": ["service-a", "service-b"],
+    "consumers": ["worker-pool-payments"]
+  }
+}
+```
+
+| Section | Description |
+|---------|-------------|
+| `capacity` | Maximum queue depth and size limits |
+| `processing` | Visibility timeout and concurrency settings |
+| `retention` | How long completed and failed jobs are kept |
+| `dead_letter` | Dead letter queue settings for this queue |
+| `access` | Access control lists for producers and consumers |
+
+## Implicit vs. Explicit Creation
+
+Queues can be created in two ways:
+
+- **Implicit**: Automatically created when the first job is enqueued to a queue name that does not exist. Uses default configuration.
+- **Explicit**: Created via the Admin API with specific configuration before any jobs are enqueued.
+
+Backends MUST support implicit queue creation.
+
+## Queue Policies
+
+Queue policies define default configuration templates:
+
+```json
+{
+  "name": "high-throughput",
+  "config": {
+    "capacity": { "max_depth": 1000000 },
+    "processing": { "visibility_timeout": 300 }
+  },
+  "match": "batch.*"
+}
+```
+
+Policies match queues by name pattern. When a queue is implicitly created and matches a policy, it inherits the policy's configuration. Explicit configuration overrides policy defaults.
+
+## HTTP Binding
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/ojs/v1/queues` | Create a queue explicitly |
+| `GET` | `/ojs/v1/queues` | List all queues |
+| `GET` | `/ojs/v1/queues/{name}` | Get queue configuration |
+| `PATCH` | `/ojs/v1/queues/{name}` | Update queue configuration |
+| `DELETE` | `/ojs/v1/queues/{name}` | Delete a queue |
+| `POST` | `/ojs/v1/queues/{name}/pause` | Pause a queue |
+| `POST` | `/ojs/v1/queues/{name}/resume` | Resume a queue |
+| `POST` | `/ojs/v1/queues/{name}/purge` | Purge all jobs from a queue |
+
+## Delete Behavior
+
+When a queue is deleted, remaining jobs are handled based on strategy:
+
+| Strategy | Behavior |
+|----------|----------|
+| `reject` | Reject deletion if queue has pending jobs (default) |
+| `purge` | Delete queue and all remaining jobs |
+| `move` | Move remaining jobs to a specified fallback queue |

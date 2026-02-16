@@ -1,0 +1,126 @@
+---
+title: "Testing"
+description: "Testing modes, assertion helpers, and SDK testing support"
+---
+
+The testing specification defines how OJS SDKs support testing of application code that enqueues and processes jobs. Three testing modes provide different trade-offs between speed and fidelity.
+
+## Testing Modes
+
+| Mode | Backend Required | Execution | Speed | Fidelity |
+|------|-----------------|-----------|-------|----------|
+| Fake | No | In-memory, no execution | Fastest | Lowest |
+| Inline | No | Synchronous, same process | Fast | Medium |
+| Real | Yes | Full async, real backend | Slowest | Highest |
+
+### Fake Mode
+
+Jobs are stored in an in-memory buffer. Handlers are never executed. Use fake mode for unit tests that verify jobs are enqueued correctly.
+
+```typescript
+import { OJS, testing } from '@openjobspec/sdk';
+
+test('creates order and enqueues fulfillment', async () => {
+  testing.useFakeMode();
+
+  await createOrder({ id: 'order_123' });
+
+  testing.assertEnqueued('order.fulfill', { args: ['order_123'] });
+  testing.refuteEnqueued('order.cancel');
+});
+```
+
+### Inline Mode
+
+Jobs are executed synchronously in the same process when enqueued. Use inline mode for integration tests that need to verify handler behavior.
+
+```typescript
+test('fulfillment handler sends email', async () => {
+  testing.useInlineMode();
+
+  await ojs.enqueue('order.fulfill', ['order_123']);
+
+  // Handler executed synchronously
+  expect(emailService.sent).toHaveLength(1);
+});
+```
+
+### Real Mode
+
+Jobs are sent to a real OJS backend and processed by real workers. Use real mode for end-to-end tests.
+
+```go
+func TestPaymentFlow(t *testing.T) {
+    client := ojs.NewTestClient(t, "http://localhost:8080")
+    defer client.Cleanup()
+
+    client.Enqueue("payment.process", []any{"txn_123"})
+    client.WaitForCompletion("payment.process", 10*time.Second)
+}
+```
+
+## Assertion Helpers
+
+| Assertion | Description |
+|-----------|-------------|
+| `assert_enqueued(type, opts)` | Verify a job was enqueued |
+| `refute_enqueued(type, opts)` | Verify a job was NOT enqueued |
+| `assert_performed(type, opts)` | Verify a job was executed (inline/real mode) |
+| `assert_completed(type)` | Verify a job completed successfully |
+| `assert_failed(type)` | Verify a job failed |
+| `assert_enqueued_count(type, n)` | Verify exactly N jobs of type were enqueued |
+
+Assertion options can filter by args, queue, priority, and metadata.
+
+## Test Utilities
+
+### Queue Drain
+
+Process all pending jobs immediately (inline mode):
+
+```ruby
+OJS::Testing.drain_all
+OJS::Testing.drain("email.send")  # Drain specific type only
+```
+
+### Time Control
+
+Manipulate time for testing scheduled jobs and retries:
+
+```python
+with ojs.testing.freeze_time("2026-02-15T10:00:00Z"):
+    ojs.enqueue("report.generate", [], scheduled_at="2026-02-15T12:00:00Z")
+
+    ojs.testing.advance_time(hours=2)
+    ojs.testing.drain_all()
+
+    assert_performed("report.generate")
+```
+
+### Failure Injection
+
+Force failures for testing error handling and retry behavior:
+
+```go
+testing.FailNext("payment.process", errors.New("connection timeout"))
+testing.FailAll("email.send", errors.New("smtp unavailable"))
+```
+
+## Test Isolation
+
+Each test MUST start with a clean state. SDKs provide:
+
+- Automatic queue clearing between tests
+- Isolated in-memory stores per test case
+- Cleanup hooks for real mode (delete test jobs)
+
+## Behavioral Differences
+
+| Feature | Fake | Inline | Real |
+|---------|------|--------|------|
+| Enqueue | ✅ Buffered | ✅ Buffered + executed | ✅ Sent to backend |
+| Handlers | ❌ Not called | ✅ Synchronous | ✅ Async |
+| Retry | ❌ Not simulated | ⚠️ Immediate retry | ✅ Full backoff |
+| Workflows | ❌ Not simulated | ⚠️ Sequential execution | ✅ Full orchestration |
+| Middleware | ✅ Enqueue chain | ✅ Both chains | ✅ Both chains |
+| Scheduling | ❌ Not simulated | ⚠️ With time control | ✅ Real scheduling |

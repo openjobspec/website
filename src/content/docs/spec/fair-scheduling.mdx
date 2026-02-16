@@ -1,0 +1,102 @@
+---
+title: "Fair Scheduling"
+description: "Work distribution strategies, worker pools, and starvation prevention"
+---
+
+Fair scheduling ensures equitable work distribution across competing consumers, preventing any single queue, tenant, or job type from monopolizing processing capacity.
+
+## Competing Consumers
+
+OJS uses a competing consumer model where multiple workers consume from the same queue. The backend is responsible for scheduling—workers simply fetch and process.
+
+Key invariant: each job is dispatched to at most one worker (at-most-once dispatch).
+
+## Worker Pools
+
+Worker pools are named groups of workers that consume from specific queues with shared concurrency limits:
+
+```json
+{
+  "name": "critical-pool",
+  "queues": ["payments", "refunds"],
+  "concurrency": 20,
+  "strategy": "weighted",
+  "weights": {
+    "payments": 3,
+    "refunds": 1
+  }
+}
+```
+
+## Distribution Strategies
+
+### Round-Robin
+
+Each queue receives equal attention. Workers rotate through queues in order, fetching one batch from each before cycling.
+
+Best for: queues with similar job sizes and similar importance.
+
+### Least-Loaded
+
+Workers preferentially consume from the queue with the most jobs waiting. This naturally balances processing across queues.
+
+Best for: queues with varying load patterns.
+
+### Weighted Fair Queuing
+
+Queues receive processing capacity proportional to assigned weights:
+
+```json
+{
+  "strategy": "weighted",
+  "weights": {
+    "critical": 5,
+    "default": 3,
+    "bulk": 1
+  }
+}
+```
+
+With these weights, roughly 55% of capacity goes to `critical`, 33% to `default`, and 11% to `bulk`.
+
+Best for: queues with different SLA requirements.
+
+## Starvation Prevention
+
+To prevent low-priority or low-weight queues from being completely starved:
+
+- **Minimum throughput**: Each queue is guaranteed a minimum percentage of processing capacity (e.g., 5%).
+- **Queue rotation**: After a configurable number of consecutive fetches from the same queue, the scheduler rotates to the next queue regardless of weight.
+- **Priority aging**: Combined with the [priority extension](/spec/priority/), job effective priority increases over time.
+
+## Per-Tenant Fairness
+
+In multi-tenant deployments, fair scheduling can interleave jobs across tenants to prevent a single tenant from monopolizing a shared queue:
+
+```json
+{
+  "tenant_fairness": {
+    "enabled": true,
+    "strategy": "round_robin"
+  }
+}
+```
+
+This ensures that if tenant A has 1,000 queued jobs and tenant B has 10, tenant B's jobs are not delayed until all of tenant A's jobs complete.
+
+## HTTP Binding
+
+```bash
+# Create a worker pool
+POST /ojs/v1/admin/pools
+{
+  "name": "critical-pool",
+  "queues": ["payments", "refunds"],
+  "concurrency": 20,
+  "strategy": "weighted",
+  "weights": {"payments": 3, "refunds": 1}
+}
+
+# Get scheduling statistics
+GET /ojs/v1/admin/scheduling/stats
+```

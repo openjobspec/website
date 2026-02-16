@@ -1,0 +1,123 @@
+---
+title: "Bulk Operations"
+description: "Batch enqueue, cancel, retry, and delete with atomicity modes"
+---
+
+Bulk operations enable efficient batch processing of multiple jobs in a single API call. OJS supports bulk enqueue, cancel, retry, and delete with configurable atomicity.
+
+## Atomicity Modes
+
+| Mode | Behavior | HTTP Status |
+|------|----------|-------------|
+| `atomic` | All-or-nothing. If any item fails, the entire batch is rolled back. | 200 (all succeed) or 422 (all rolled back) |
+| `partial` | Best-effort. Each item is processed independently. | 207 Multi-Status |
+
+The default mode is `partial`.
+
+## Bulk Enqueue
+
+```bash
+POST /ojs/v1/jobs/batch
+Content-Type: application/openjobspec+json
+
+{
+  "mode": "partial",
+  "jobs": [
+    { "type": "email.send", "args": ["alice@example.com", "Welcome!"] },
+    { "type": "email.send", "args": ["bob@example.com", "Welcome!"] },
+    { "type": "email.send", "args": ["carol@example.com", "Welcome!"] }
+  ]
+}
+```
+
+### Response (Partial Mode)
+
+```json
+{
+  "results": [
+    { "index": 0, "status": 201, "job_id": "01961234-0001-7abc-..." },
+    { "index": 1, "status": 201, "job_id": "01961234-0002-7abc-..." },
+    { "index": 2, "status": 409, "error": { "code": "OJS_DUPLICATE", "message": "Unique constraint violated" } }
+  ],
+  "summary": {
+    "total": 3,
+    "succeeded": 2,
+    "failed": 1
+  }
+}
+```
+
+## Bulk Cancel
+
+Cancel multiple jobs by ID or filter:
+
+```bash
+POST /ojs/v1/jobs/batch/cancel
+{
+  "job_ids": ["01961234-0001-...", "01961234-0002-..."]
+}
+```
+
+Or cancel by filter:
+
+```bash
+POST /ojs/v1/jobs/batch/cancel
+{
+  "filter": {
+    "job_type": "report.generate",
+    "queue": "default",
+    "state": "available"
+  }
+}
+```
+
+## Bulk Retry
+
+Retry multiple dead letter or failed jobs:
+
+```bash
+POST /ojs/v1/jobs/batch/retry
+{
+  "filter": {
+    "job_type": "payment.*",
+    "error_type": "connection_timeout"
+  }
+}
+```
+
+## Bulk Delete
+
+```bash
+DELETE /ojs/v1/jobs/batch
+{
+  "filter": {
+    "state": "completed",
+    "completed_before": "2026-02-01T00:00:00Z"
+  }
+}
+```
+
+## Idempotency Keys
+
+Bulk operations support idempotency keys for safe retries:
+
+```bash
+POST /ojs/v1/jobs/batch
+Idempotency-Key: batch-import-2026-02-15
+```
+
+If a request with the same idempotency key is received within 24 hours, the backend returns the original response without re-processing.
+
+## Batch Size Limits
+
+Backends MUST accept batches of at least 100 items. Backends SHOULD support up to 1,000 items per batch. Larger batches should be split by the client.
+
+## Observability
+
+Bulk operations emit aggregate events:
+
+| Event | Data |
+|-------|------|
+| `batch.enqueued` | `total`, `succeeded`, `failed` |
+| `batch.cancelled` | `total`, `succeeded`, `failed` |
+| `batch.retried` | `total`, `succeeded`, `failed` |

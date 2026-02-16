@@ -1,0 +1,127 @@
+---
+title: "Rate Limiting"
+description: "Concurrency limits, window-based rates, and throttling for job execution"
+---
+
+Rate limiting controls how fast jobs are processed, protecting downstream services from overload. OJS supports three complementary strategies: concurrency limiting, window-based rate limiting, and throttling.
+
+## Rate Limit Policy
+
+```json
+{
+  "type": "api.call",
+  "args": ["https://api.example.com/data"],
+  "rate_limit": {
+    "key": "api.example.com",
+    "concurrency": 5,
+    "rate": {
+      "limit": 100,
+      "period": "PT1M"
+    },
+    "throttle": {
+      "interval": "PT1S"
+    },
+    "on_limit": "wait"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | Grouping key for rate limit buckets |
+| `concurrency` | integer | Max simultaneous active jobs per key |
+| `rate.limit` | integer | Max jobs per time window |
+| `rate.period` | string | ISO 8601 duration for the window |
+| `throttle.interval` | string | Minimum time between job starts |
+| `on_limit` | string | Action when limit reached: `"wait"`, `"reschedule"`, or `"drop"` |
+
+## Concurrency Limiting
+
+Concurrency limiting caps the number of simultaneously active jobs sharing the same key:
+
+```json
+{
+  "rate_limit": {
+    "key": "stripe-api",
+    "concurrency": 10
+  }
+}
+```
+
+When a job is fetched and the concurrency limit is reached for its key, the job remains in the queue until a slot opens. This is the simplest and most common form of rate limiting.
+
+## Window-Based Rate Limiting
+
+Window-based limiting caps the total number of jobs processed within a time period:
+
+```json
+{
+  "rate_limit": {
+    "key": "email-provider",
+    "rate": {
+      "limit": 1000,
+      "period": "PT1H"
+    }
+  }
+}
+```
+
+Backends MAY implement fixed windows (reset at period boundaries) or sliding windows (rolling count over the period). Sliding windows provide smoother throughput but are more complex to implement.
+
+## Throttling
+
+Throttling ensures even spacing between job executions:
+
+```json
+{
+  "rate_limit": {
+    "key": "webhook-delivery",
+    "throttle": {
+      "interval": "PT0.1S"
+    }
+  }
+}
+```
+
+This ensures at most one job per 100ms for the `webhook-delivery` key, regardless of how many jobs are queued.
+
+## Backpressure Actions
+
+When a rate limit is reached, the `on_limit` field determines what happens:
+
+| Action | Behavior |
+|--------|----------|
+| `wait` | Hold the job in the queue until the limit allows processing (default) |
+| `reschedule` | Return the job to the queue with a delay based on the rate limit |
+| `drop` | Discard the job silently |
+
+## Dynamic Rate Limits
+
+Workers can signal rate limit changes by returning a 429-equivalent response with rate limit information. The backend dynamically adjusts the limit:
+
+```json
+{
+  "error": {
+    "type": "rate_limited",
+    "retry_after": 30
+  }
+}
+```
+
+## Interaction with Other Extensions
+
+- **Priority**: Rate limits take precedence over priority ordering. Within the rate limit, higher-priority jobs are processed first.
+- **Retry**: Retried jobs count against rate limits. Both new and retried jobs share the same rate limit bucket.
+- **Multi-tenancy**: Rate limits can be partitioned by tenant using composite keys (e.g., `tenant_123:api.example.com`).
+
+## HTTP Binding
+
+```bash
+# Inspect current rate limit state
+curl http://localhost:8080/ojs/v1/rate-limits/stripe-api
+
+# Override a rate limit dynamically
+curl -X PUT http://localhost:8080/ojs/v1/rate-limits/stripe-api \
+  -H "Content-Type: application/json" \
+  -d '{"concurrency": 20}'
+```
