@@ -1,0 +1,100 @@
+---
+title: "Disaster Recovery"
+description: "Durability levels, high availability, replication, and failover"
+---
+
+The disaster recovery specification defines durability guarantees, high availability architectures, and recovery procedures for OJS backends.
+
+## Durability Levels
+
+| Level | Description | Data Loss Risk |
+|-------|-------------|----------------|
+| 0 | Memory-only | Jobs lost on process restart |
+| 1 | Single-node persistent | Jobs survive process restart, lost on disk failure |
+| 2 | Replicated persistent | Jobs survive node failure |
+
+Production deployments SHOULD use Level 2 (replicated persistent).
+
+## High Availability Architectures
+
+### Active-Passive Failover
+
+One primary node handles all traffic. A standby replica takes over on primary failure.
+
+- **RPO**: Depends on replication lag (synchronous = 0, asynchronous = seconds)
+- **RTO**: Failover detection + promotion time (typically 10–30 seconds)
+- **Complexity**: Low
+
+### Active-Active Multi-Primary
+
+Multiple nodes handle traffic simultaneously. Requires conflict resolution for concurrent operations.
+
+- **RPO**: 0 (all writes are durable across nodes)
+- **RTO**: Near-zero (remaining nodes continue serving)
+- **Complexity**: High
+
+## Replication
+
+### Synchronous Replication
+
+Writes are not acknowledged until replicated. Guarantees zero data loss but adds latency.
+
+### Asynchronous Replication
+
+Writes are acknowledged immediately and replicated in the background. Lower latency but may lose recently written jobs on failover.
+
+OJS requires that visibility timeouts and job state transitions are replicated before acknowledgment in synchronous mode.
+
+## Failover Behavior
+
+When failover occurs:
+
+1. In-flight jobs on the failed node are recovered via heartbeat timeout.
+2. Clients reconnect to the new primary (via DNS, load balancer, or service discovery).
+3. Jobs in `active` state on the failed node transition to `available` after visibility timeout.
+
+## Split-Brain Prevention
+
+Backends MUST implement split-brain prevention to avoid dual-primary scenarios:
+
+- **Fencing tokens**: Each primary holds a monotonically increasing token. Stale primaries are fenced out.
+- **Distributed locking**: Consensus-based leader election (e.g., Raft, etcd, ZooKeeper).
+
+## Backup and Restore
+
+### Point-in-Time Recovery
+
+Backends SHOULD support restoring to a specific point in time using:
+
+- **Redis**: RDB snapshots + AOF replay
+- **PostgreSQL**: WAL archiving + PITR
+- **DynamoDB**: Point-in-time recovery (PITR)
+
+### Portable Export
+
+Backends SHOULD support exporting jobs in a portable OJS JSON format for cross-backend migration.
+
+## Graceful Degradation
+
+When a backend is partially available:
+
+| Mode | Behavior |
+|------|----------|
+| Read-only | Accept queries but reject new jobs |
+| Queue-level degradation | Some queues available, others unavailable |
+| Circuit breaker | Stop accepting traffic, return 503 |
+
+## Observability
+
+| Metric | Description |
+|--------|-------------|
+| `ojs.replication.lag` | Replication delay in milliseconds |
+| `ojs.failover.count` | Number of failover events |
+| `ojs.backup.age` | Time since last backup |
+| `ojs.backup.size` | Size of last backup |
+
+| Event | Description |
+|-------|-------------|
+| `system.failover.started` | Failover initiated |
+| `system.failover.completed` | New primary active |
+| `system.replication.lag_warning` | Replication lag exceeds threshold |

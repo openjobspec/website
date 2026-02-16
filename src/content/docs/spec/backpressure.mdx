@@ -1,0 +1,79 @@
+---
+title: "Backpressure"
+description: "Queue overflow handling, producer throttling, and capacity management"
+---
+
+Backpressure defines how the system handles producer overload when queues approach capacity. OJS specifies three strategies for managing overflow, with clear signals to producers.
+
+## Backpressure Strategies
+
+| Strategy | Behavior | Use Case |
+|----------|----------|----------|
+| `reject` | Return 429 to the producer | Default. Producer decides what to do. |
+| `block` | Hold the connection open until space is available | Synchronous producers that can wait. |
+| `drop_oldest` | Discard the oldest job in the queue to make room | Time-sensitive workloads where newer data supersedes older. |
+
+## Queue Bounds
+
+Queues can be bounded by depth (number of jobs) or size (total bytes):
+
+```json
+{
+  "name": "notifications",
+  "capacity": {
+    "max_depth": 50000,
+    "max_size_bytes": 52428800,
+    "on_overflow": "reject"
+  }
+}
+```
+
+When either limit is reached, the configured backpressure strategy activates.
+
+## HTTP Response
+
+When `reject` is the strategy, the backend returns 429 with pressure information:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 5
+X-OJS-Queue-Depth: 50000
+X-OJS-Queue-Max-Depth: 50000
+X-OJS-Queue-Pressure: 1.0
+
+{
+  "code": "OJS_RATE_LIMITED",
+  "message": "Queue 'notifications' is at capacity",
+  "retryable": true
+}
+```
+
+The `X-OJS-Queue-Pressure` header indicates queue fullness as a float from 0.0 to 1.0, allowing producers to implement proactive throttling before hitting the limit.
+
+## Producer-Side Handling
+
+SDKs SHOULD implement client-side backpressure handling:
+
+- **Exponential backoff**: Retry with increasing delays on 429 responses.
+- **Circuit breaker**: Stop sending after consecutive failures, probe periodically.
+- **Local buffering**: Buffer jobs locally and drain when the queue has capacity.
+
+## Interaction with Other Extensions
+
+- **Rate limiting**: Rate limits and backpressure are complementary. Rate limiting caps throughput; backpressure caps queue depth.
+- **Multi-tenancy**: Per-tenant queue depth thresholds prevent a single tenant from filling shared queues.
+- **Priority**: Under backpressure with `drop_oldest`, lower-priority jobs are dropped first.
+
+## Observability
+
+| Event | Description |
+|-------|-------------|
+| `queue.pressure_warning` | Queue depth exceeds 80% of capacity |
+| `queue.pressure_critical` | Queue depth exceeds 95% of capacity |
+| `queue.overflow` | Backpressure strategy activated |
+
+| Metric | Description |
+|--------|-------------|
+| `ojs.queue.pressure` | Queue fullness ratio (0.0–1.0) |
+| `ojs.queue.rejected` | Count of rejected enqueue attempts |
+| `ojs.queue.dropped` | Count of jobs dropped (drop_oldest strategy) |

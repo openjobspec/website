@@ -1,0 +1,144 @@
+---
+title: "Observability"
+description: "OpenTelemetry conventions for traces, metrics, and structured logging"
+---
+
+OJS defines OpenTelemetry-native observability conventions covering trace context propagation, span semantics, metrics, structured logging, and health endpoints.
+
+## Trace Context Propagation
+
+OJS uses W3C Trace Context for distributed tracing. The trace parent is stored in the job envelope metadata:
+
+```json
+{
+  "type": "email.send",
+  "args": ["user@example.com"],
+  "meta": {
+    "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+  }
+}
+```
+
+When a job is enqueued, the SDK injects the current trace context into `meta.traceparent`. When a worker processes the job, it extracts the trace context and creates a linked span, enabling end-to-end tracing from producer through queue to consumer.
+
+## Span Conventions
+
+### Enqueue Spans (PRODUCER)
+
+| Attribute | Value |
+|-----------|-------|
+| `messaging.system` | `ojs` |
+| `messaging.operation` | `publish` |
+| `ojs.job.id` | Job ID |
+| `ojs.job.type` | Job type |
+| `ojs.queue` | Target queue |
+| Span kind | `PRODUCER` |
+
+### Process Spans (CONSUMER)
+
+| Attribute | Value |
+|-----------|-------|
+| `messaging.system` | `ojs` |
+| `messaging.operation` | `process` |
+| `ojs.job.id` | Job ID |
+| `ojs.job.type` | Job type |
+| `ojs.job.attempt` | Current attempt number |
+| `ojs.worker.id` | Worker identifier |
+| Span kind | `CONSUMER` |
+| Links | Link to the PRODUCER span via `traceparent` |
+
+### System Spans
+
+Backend internal operations create spans for: scheduler promotion, cron evaluation, stalled job reaping, dead letter processing, and workflow orchestration.
+
+## Metrics
+
+### Counters
+
+| Metric | Description |
+|--------|-------------|
+| `ojs.jobs.enqueued` | Total jobs enqueued |
+| `ojs.jobs.completed` | Total jobs completed successfully |
+| `ojs.jobs.failed` | Total jobs that failed (including retries) |
+| `ojs.jobs.retried` | Total retry attempts |
+| `ojs.jobs.discarded` | Total jobs discarded after exhaustion |
+| `ojs.jobs.expired` | Total jobs expired (TTL) |
+
+### Histograms
+
+| Metric | Unit | Description |
+|--------|------|-------------|
+| `ojs.jobs.duration` | ms | Job execution duration |
+| `ojs.jobs.queue_time` | ms | Time spent waiting in queue |
+| `ojs.jobs.enqueue_duration` | ms | Time to enqueue a job |
+
+### Gauges
+
+| Metric | Description |
+|--------|-------------|
+| `ojs.queue.depth` | Current number of jobs in queue |
+| `ojs.workers.active` | Number of connected workers |
+| `ojs.workers.busy` | Number of workers currently processing |
+
+All metrics SHOULD be labeled with `queue` and `job_type` dimensions for filtering.
+
+## Structured Logging
+
+OJS backends SHOULD emit structured JSON logs with correlation fields:
+
+```json
+{
+  "timestamp": "2026-02-15T10:30:00.123Z",
+  "severity": "INFO",
+  "message": "job completed",
+  "component": "worker",
+  "job_id": "01961234-5678-7abc-def0-123456789abc",
+  "job_type": "email.send",
+  "queue": "default",
+  "duration_ms": 245,
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "span_id": "b7ad6b7169203331"
+}
+```
+
+Including `trace_id` and `span_id` in log entries enables correlation between logs and traces.
+
+## Health Endpoint
+
+Backends MUST expose a health endpoint at `GET /ojs/v1/health`:
+
+```json
+{
+  "status": "healthy",
+  "backend": {
+    "type": "redis",
+    "connected": true,
+    "latency_ms": 1
+  },
+  "queues": {
+    "total": 5,
+    "paused": 0
+  },
+  "workers": {
+    "active": 3,
+    "busy": 2
+  }
+}
+```
+
+| Status | Meaning |
+|--------|---------|
+| `healthy` | All systems operational |
+| `degraded` | Functioning with reduced capability |
+| `unhealthy` | Unable to process jobs |
+
+## Conformance
+
+| Requirement | Level |
+|-------------|-------|
+| Health endpoint | Required (Level 0) |
+| Trace context propagation | Required (Level 1) |
+| Job lifecycle metrics | Required (Level 1) |
+| Structured logging with job context | Recommended |
+| System span instrumentation | Recommended |
+| Queue and worker gauges | Recommended |

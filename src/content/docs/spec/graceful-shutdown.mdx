@@ -1,0 +1,106 @@
+---
+title: "Graceful Shutdown"
+description: "Signal handling, drain phases, and container integration for clean worker shutdown"
+---
+
+Graceful shutdown ensures workers stop processing cleanly without losing jobs. OJS defines a three-phase shutdown protocol aligned with container orchestration platforms.
+
+## Shutdown Phases
+
+```
+Running → Quiet → Drain → Stop
+```
+
+### Phase 1: Quiet
+
+The worker stops fetching new jobs but continues processing in-flight jobs. Triggered by `SIGTSTP` (quiet only) or `SIGTERM` (begins full shutdown).
+
+### Phase 2: Drain
+
+In-flight jobs are given time to complete. The worker continues sending heartbeats and acknowledging completed jobs.
+
+### Phase 3: Stop
+
+After the grace period expires, remaining in-flight jobs are reported as failed with error type `"shutdown"`. The worker deregisters and exits.
+
+## Signal Handling
+
+| Signal | Action |
+|--------|--------|
+| `SIGTERM` | Begin graceful shutdown (quiet → drain → stop) |
+| `SIGINT` | Same as SIGTERM |
+| `SIGTSTP` | Enter quiet mode only (stop fetching, keep processing) |
+| `SIGCONT` | Resume from quiet mode to running |
+
+## Grace Period
+
+The grace period (default: 30 seconds) controls how long the drain phase lasts. It MUST be configurable and SHOULD be shorter than the container's termination grace period.
+
+```yaml
+# Worker configuration
+grace_period: 25s   # 5s less than Kubernetes default (30s)
+```
+
+### Kubernetes Alignment
+
+Kubernetes sends `SIGTERM` and waits `terminationGracePeriodSeconds` (default: 30s) before sending `SIGKILL`. Setting the worker grace period to 25s leaves 5 seconds for cleanup and deregistration.
+
+```yaml
+# Kubernetes deployment
+spec:
+  terminationGracePeriodSeconds: 30
+  containers:
+    - name: worker
+      env:
+        - name: OJS_GRACE_PERIOD
+          value: "25s"
+```
+
+### Docker Compose
+
+```yaml
+services:
+  worker:
+    stop_grace_period: 30s
+```
+
+## In-Flight Job Handling
+
+Jobs that do not complete within the grace period are handled as follows:
+
+1. The worker sends a `FAIL` for each incomplete job with error type `"shutdown"`.
+2. These failures count as an attempt and follow the retry policy.
+3. The backend's dead worker detection provides a safety net—if the worker crashes during shutdown, the heartbeat timeout recovers the jobs.
+
+## Container Integration
+
+### Kubernetes preStop Hook
+
+For additional drain time before SIGTERM:
+
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command: ["sh", "-c", "sleep 5"]
+```
+
+This gives the load balancer time to stop routing traffic before the worker begins shutdown.
+
+## Server Shutdown
+
+Backend servers also support graceful shutdown:
+
+1. Stop accepting new HTTP connections
+2. Drain in-flight HTTP requests (with timeout)
+3. Stop background schedulers (cron, retry promoter, stalled reaper)
+4. Close backend connections (Redis, PostgreSQL, etc.)
+
+## Conformance
+
+Implementations MUST:
+- Handle SIGTERM and initiate graceful shutdown
+- Support configurable grace period
+- Report incomplete jobs as failed on shutdown
+- Deregister the worker from the backend
+- Send final heartbeat with `state: "terminated"`
