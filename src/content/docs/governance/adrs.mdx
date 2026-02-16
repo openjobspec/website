@@ -1,0 +1,49 @@
+---
+title: "Architecture Decision Records"
+description: "Key design decisions and their rationale for the OJS specification"
+---
+
+Architecture Decision Records (ADRs) document significant design decisions made during the development of the Open Job Spec. Each ADR captures the context, decision, and consequences of a choice that shapes the specification.
+
+ADRs are maintained in the [`spec/adrs/`](https://github.com/openjobspec/openjobspec/tree/main/spec/adrs) directory.
+
+## Index
+
+| ADR | Title | Summary |
+|-----|-------|---------|
+| [001](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/001-three-layer-architecture.md) | Three-Layer Architecture | Core envelope (Layer 1) → Wire formats (Layer 2) → Protocol bindings (Layer 3), inspired by CloudEvents |
+| [002](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/002-eight-state-lifecycle.md) | Eight-State Job Lifecycle | `scheduled → available → pending → active → completed/retryable/cancelled/discarded` |
+| [003](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/003-args-over-payload.md) | Args (Array) Over Payload (Object) | Using `args` (JSON array) instead of `payload` (JSON object) for job arguments |
+| [004](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/004-uuidv7-job-ids.md) | UUIDv7 for Job IDs | Time-sortable UUIDs for natural chronological ordering and distributed generation |
+| [005](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/005-backend-interface-design.md) | Backend Interface Design | Three-layer internal architecture (API → Core → Storage) for all backends |
+| [006](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/006-conformance-level-hierarchy.md) | Conformance Level Hierarchy | Five levels (0–4) as progressive supersets, inspired by Unicode conformance |
+| [007](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/007-client-side-encryption-architecture.md) | Client-Side Encryption Architecture | Codec-based encryption at the SDK layer, keeping backends zero-knowledge |
+| [008](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/008-multi-tenancy-isolation-models.md) | Multi-Tenancy Isolation Models | Three models (namespace, shared, hybrid) with hybrid sharded queues recommended |
+| [009](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/009-transactional-enqueue-pattern.md) | Transactional Enqueue Pattern | Outbox pattern for ensuring jobs are only enqueued when the transaction commits |
+| [010](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/010-deduplication-strategy.md) | Deduplication Strategy | SHA-256 hash of canonical JSON for unique key computation |
+| [011](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/011-opentelemetry-native-observability.md) | OpenTelemetry-Native Observability | Native OpenTelemetry integration for traces, metrics, and logs |
+| [012](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/012-control-plane-data-plane-separation.md) | Control Plane / Data Plane Separation | Separate admin API path prefix (`/ojs/v1/admin/`) from data-plane operations |
+| [013](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/013-nats-jetstream-backend-architecture.md) | NATS JetStream Backend Architecture | JetStream streams + KV stores for a lightweight single-binary backend |
+| [014](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/014-kafka-hybrid-backend-architecture.md) | Kafka Hybrid Backend Architecture | Kafka for transport + Redis for state in a hybrid architecture |
+| [015](https://github.com/openjobspec/openjobspec/blob/main/spec/adrs/015-sqs-dynamodb-backend-architecture.md) | SQS + DynamoDB Backend Architecture | AWS-native backend using SQS for transport and DynamoDB for state |
+
+## ADR Format
+
+Each ADR follows a standard structure:
+
+1. **Status** — Proposed, Accepted, Deprecated, or Superseded
+2. **Context** — The situation and forces driving the decision
+3. **Decision** — What was decided and why
+4. **Consequences** — Positive and negative outcomes of the decision
+5. **Alternatives Considered** — Other options that were evaluated
+
+## Creating New ADRs
+
+New ADRs follow the RFC process. To propose an architecture decision:
+
+1. Create a new ADR file following the template in `spec/adrs/README.md`
+2. Submit a pull request with the proposal
+3. Discuss in the PR and gather feedback
+4. ADR is accepted when consensus is reached
+
+See the [RFC Process](/governance/rfc-process/) for the full contribution workflow.
