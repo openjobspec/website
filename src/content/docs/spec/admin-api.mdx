@@ -1,0 +1,135 @@
+---
+title: "Admin API"
+description: "Control-plane API for queue management, job inspection, and system operations"
+---
+
+The Admin API provides operational control over an OJS backend, separated from the data-plane API used by producers and workers. All admin endpoints live under the `/ojs/v1/admin/` path prefix.
+
+## Design Principles
+
+- **Path-based separation**: Admin endpoints are clearly separated from data-plane endpoints.
+- **Read-heavy**: Most admin operations are read-only queries and statistics.
+- **Safe by default**: Destructive operations require explicit confirmation.
+- **Paginated**: All list endpoints support cursor-based pagination.
+
+## Queue Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/ojs/v1/admin/queues` | List all queues with stats |
+| `GET` | `/ojs/v1/admin/queues/{name}` | Get queue details and configuration |
+| `POST` | `/ojs/v1/admin/queues/{name}/pause` | Pause a queue |
+| `POST` | `/ojs/v1/admin/queues/{name}/resume` | Resume a paused queue |
+| `POST` | `/ojs/v1/admin/queues/{name}/purge` | Delete all jobs from a queue |
+| `PATCH` | `/ojs/v1/admin/queues/{name}` | Update queue configuration |
+
+### Queue Stats
+
+```json
+{
+  "name": "default",
+  "state": "active",
+  "counts": {
+    "available": 150,
+    "active": 10,
+    "scheduled": 25,
+    "retryable": 3,
+    "dead_letter": 7
+  },
+  "throughput": {
+    "processed_last_minute": 120,
+    "processed_last_hour": 5400
+  }
+}
+```
+
+## Job Inspection
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/ojs/v1/admin/jobs` | List jobs with filtering |
+| `GET` | `/ojs/v1/admin/jobs/{id}` | Get full job details |
+| `POST` | `/ojs/v1/admin/jobs/{id}/cancel` | Cancel a specific job |
+| `POST` | `/ojs/v1/admin/jobs/{id}/retry` | Retry a specific job |
+| `POST` | `/ojs/v1/admin/jobs/batch/cancel` | Bulk cancel jobs |
+| `POST` | `/ojs/v1/admin/jobs/batch/retry` | Bulk retry jobs |
+
+### Job Filtering
+
+```bash
+GET /ojs/v1/admin/jobs?queue=payments&state=active&type=payment.process&limit=20
+```
+
+| Filter | Description |
+|--------|-------------|
+| `queue` | Filter by queue name |
+| `state` | Filter by job state |
+| `type` | Filter by job type (prefix match with `*`) |
+| `since` / `until` | Filter by creation time |
+| `worker_id` | Filter by processing worker |
+
+## Worker Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/ojs/v1/admin/workers` | List active workers |
+| `GET` | `/ojs/v1/admin/workers/{id}` | Get worker details |
+| `POST` | `/ojs/v1/admin/workers/{id}/quiet` | Send quiet signal to worker |
+| `DELETE` | `/ojs/v1/admin/workers/{id}` | Deregister a worker |
+
+## Statistics
+
+### Current Stats
+
+```bash
+GET /ojs/v1/admin/stats
+```
+
+```json
+{
+  "jobs": {
+    "total_enqueued": 1250000,
+    "total_completed": 1200000,
+    "total_failed": 48000,
+    "total_discarded": 2000
+  },
+  "queues": {
+    "total": 5,
+    "paused": 0
+  },
+  "workers": {
+    "active": 12,
+    "busy": 8,
+    "quiet": 1
+  }
+}
+```
+
+### Historical Stats
+
+```bash
+GET /ojs/v1/admin/stats/history?period=1h&range=24h
+```
+
+Returns time-series data for throughput, error rates, and queue depths.
+
+## Dead Letter Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/ojs/v1/admin/dead-letter` | List dead letter jobs |
+| `GET` | `/ojs/v1/admin/dead-letter/{id}` | Get dead letter job details |
+| `POST` | `/ojs/v1/admin/dead-letter/{id}/retry` | Retry a dead letter job |
+| `DELETE` | `/ojs/v1/admin/dead-letter/{id}` | Delete a dead letter job |
+| `POST` | `/ojs/v1/admin/dead-letter/retry` | Bulk retry with filters |
+| `DELETE` | `/ojs/v1/admin/dead-letter` | Bulk delete with filters |
+
+## Security
+
+Admin API endpoints require the `admin` role. Backends SHOULD implement RBAC scopes to separate admin access from data-plane access:
+
+| Scope | Description |
+|-------|-------------|
+| `admin:read` | Read-only access to stats, lists, and details |
+| `admin:write` | Pause, resume, cancel, retry operations |
+| `admin:delete` | Purge, delete, and destructive operations |

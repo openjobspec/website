@@ -1,0 +1,113 @@
+---
+title: "Protobuf Format"
+description: "Binary wire format encoding using Protocol Buffers"
+---
+
+The Protobuf wire format is a Layer 2 specification that defines how OJS job envelopes are serialized using Protocol Buffers. It provides a compact, efficient alternative to JSON for high-throughput deployments.
+
+## Content Negotiation
+
+The Protobuf format uses the media type `application/openjobspec+proto`:
+
+```bash
+POST /ojs/v1/jobs
+Content-Type: application/openjobspec+proto
+Accept: application/openjobspec+proto
+```
+
+Backends that support Protobuf MUST also support JSON. Clients negotiate the format via `Content-Type` and `Accept` headers.
+
+## Message Definitions
+
+### JobEnvelope
+
+```protobuf
+message JobEnvelope {
+  string id = 1;
+  string type = 2;
+  string queue = 3;
+  repeated google.protobuf.Value args = 4;
+  JobState state = 5;
+  int32 priority = 6;
+  int32 attempt = 7;
+  int32 max_attempts = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp scheduled_at = 10;
+  google.protobuf.Timestamp started_at = 11;
+  google.protobuf.Timestamp completed_at = 12;
+  RetryPolicy retry = 13;
+  UniquePolicy unique = 14;
+  map<string, google.protobuf.Value> meta = 15;
+  repeated JobError errors = 16;
+}
+```
+
+### JobState
+
+```protobuf
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_SCHEDULED = 1;
+  JOB_STATE_AVAILABLE = 2;
+  JOB_STATE_PENDING = 3;
+  JOB_STATE_ACTIVE = 4;
+  JOB_STATE_COMPLETED = 5;
+  JOB_STATE_RETRYABLE = 6;
+  JOB_STATE_CANCELLED = 7;
+  JOB_STATE_DISCARDED = 8;
+}
+```
+
+### RetryPolicy
+
+```protobuf
+message RetryPolicy {
+  int32 max_attempts = 1;
+  google.protobuf.Duration initial_interval = 2;
+  double backoff_coefficient = 3;
+  google.protobuf.Duration max_interval = 4;
+  bool jitter = 5;
+  repeated string non_retryable_errors = 6;
+  string on_exhaustion = 7;
+}
+```
+
+## Field Organization
+
+| Range | Purpose |
+|-------|---------|
+| 1–19 | Core fields (defined by this spec) |
+| 20–99 | Reserved for future OJS fields |
+| 100+ | Extension fields |
+
+## Type Mapping
+
+| OJS Type | Protobuf Type |
+|----------|---------------|
+| string | `string` |
+| integer | `int32` / `int64` |
+| number | `double` |
+| boolean | `bool` |
+| timestamp | `google.protobuf.Timestamp` |
+| duration | `google.protobuf.Duration` |
+| any | `google.protobuf.Value` |
+| map | `map<string, Value>` |
+
+## Compatibility
+
+Protobuf and JSON formats MUST round-trip losslessly. A job serialized to Protobuf, then deserialized back to JSON, MUST produce an identical JSON document (modulo field ordering).
+
+## Performance
+
+Protobuf provides approximately 40–60% size reduction compared to JSON, with faster serialization and deserialization. This matters most in high-throughput scenarios (10,000+ jobs/sec) and bandwidth-constrained environments.
+
+## Code Generation
+
+The `ojs-proto/` repository uses [Buf](https://buf.build/) for linting and code generation:
+
+```bash
+buf lint          # Lint proto files
+buf generate      # Generate Go + TypeScript code
+```
+
+Generated code includes full gRPC client and server stubs for both Go and TypeScript.

@@ -1,0 +1,82 @@
+---
+title: "AMQP Binding"
+description: "AMQP 0-9-1 protocol binding for RabbitMQ and compatible brokers"
+---
+
+The AMQP binding maps OJS operations to AMQP 0-9-1 primitives, enabling OJS backends built on RabbitMQ, Azure Service Bus, and other AMQP-compatible message brokers.
+
+## Topology
+
+```
+Producer → Direct Exchange → Queue (ojs.queue.{name})
+                           → DLX  → Dead Letter Queue (ojs.dead.{name})
+                           → Retry Exchange → Delay Queues (TTL-based)
+```
+
+### Exchange and Queue Setup
+
+| Component | Name | Type | Description |
+|-----------|------|------|-------------|
+| Job exchange | `ojs.direct` | Direct | Routes jobs to queues by routing key |
+| Job queue | `ojs.queue.{name}` | Classic | Per-queue job storage |
+| Dead letter exchange | `ojs.dlx` | Direct | Routes dead letter jobs |
+| Dead letter queue | `ojs.dead.{name}` | Classic | Per-queue dead letter storage |
+| Retry exchange | `ojs.retry` | Direct | Routes jobs to delay queues |
+
+## Operation Mapping
+
+| OJS Operation | AMQP Primitive | Details |
+|---------------|----------------|---------|
+| PUSH (enqueue) | `Basic.Publish` | Publish to `ojs.direct` with routing key = queue name |
+| FETCH (dequeue) | `Basic.Consume` | Consume from `ojs.queue.{name}` with manual ack |
+| ACK | `Basic.Ack` | Acknowledge successful processing |
+| FAIL (retryable) | `Basic.Nack` + republish | Nack and publish to retry exchange with delay |
+| FAIL (terminal) | `Basic.Nack` | Nack without requeue; routes to DLX |
+| CANCEL | `Basic.Nack` | Nack without requeue |
+
+## Message Properties
+
+| AMQP Property | OJS Field | Description |
+|---------------|-----------|-------------|
+| `message_id` | `id` | Job ID (UUIDv7) |
+| `type` | `type` | Job type |
+| `content_type` | — | `application/openjobspec+json` |
+| `delivery_mode` | — | `2` (persistent) |
+| `priority` | `priority` | AMQP priority (0–9 mapped from OJS priority) |
+| `timestamp` | `created_at` | Job creation time |
+| `expiration` | `enqueue_ttl` | Message TTL in milliseconds |
+
+## Headers
+
+OJS metadata is stored in AMQP headers with the `x-ojs-` prefix:
+
+| Header | Description |
+|--------|-------------|
+| `x-ojs-attempt` | Current attempt number |
+| `x-ojs-queue` | Original queue name |
+| `x-ojs-scheduled-at` | Scheduled execution time |
+| `x-ojs-traceparent` | W3C Trace Context |
+
+## Retry Pattern
+
+Retries use dead letter exchanges with TTL-based delay queues:
+
+1. Worker nacks the message with `requeue: false`
+2. Message routes to the retry exchange via DLX configuration
+3. Retry exchange routes to a delay queue with the appropriate TTL
+4. After TTL expires, the message is re-routed to the original queue
+
+For backends using the [RabbitMQ Delayed Message Exchange plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange), a single exchange with per-message delay headers can replace the TTL queue chain.
+
+## Connection Management
+
+- **Connection pooling**: One connection per application, multiple channels.
+- **Channel-per-thread**: Each worker thread uses its own channel.
+- **Reconnection**: Exponential backoff with jitter on connection loss.
+- **Heartbeat**: AMQP heartbeat interval of 60 seconds recommended.
+
+## Observability
+
+- W3C Trace Context propagated via `x-ojs-traceparent` header.
+- Metrics exported for publish rate, consume rate, ack/nack counts, and queue depth.
+- RabbitMQ management plugin provides additional monitoring.

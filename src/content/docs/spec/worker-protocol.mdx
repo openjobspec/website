@@ -1,0 +1,147 @@
+---
+title: "Worker Protocol"
+description: "Worker lifecycle, heartbeat protocol, and coordination semantics"
+---
+
+The worker protocol defines how workers register with the backend, receive jobs, report progress, and coordinate graceful shutdown. It is a Layer 3 (protocol binding) specification that builds on the core lifecycle.
+
+## Worker Lifecycle States
+
+Workers follow a four-state lifecycle:
+
+```
+running → quiet → terminate → terminated
+```
+
+| State | Description |
+|-------|-------------|
+| `running` | Actively fetching and processing jobs |
+| `quiet` | Stop fetching new jobs, continue processing in-flight jobs |
+| `terminate` | Stop fetching, cancel remaining jobs after grace period |
+| `terminated` | Worker has disconnected |
+
+State transitions can be initiated by the worker (via signals) or by the server (via heartbeat response directives).
+
+## Registration
+
+Workers register with the backend on startup:
+
+```json
+{
+  "worker_id": "worker-abc-123",
+  "hostname": "web-01.example.com",
+  "pid": 12345,
+  "queues": ["default", "emails", "payments"],
+  "concurrency": 10,
+  "labels": ["region:us-east-1", "pool:critical"]
+}
+```
+
+Registration establishes the worker's identity and declares which queues it consumes from, its concurrency limit, and optional labels for routing and filtering.
+
+## Heartbeat Protocol (BEAT)
+
+Workers send periodic heartbeats to the backend. The default interval is 5 seconds.
+
+### Request
+
+```json
+{
+  "worker_id": "worker-abc-123",
+  "state": "running",
+  "active_job_ids": [
+    "01961234-5678-7abc-def0-123456789abc",
+    "01961234-5678-7abc-def0-987654321fed"
+  ]
+}
+```
+
+### Response
+
+```json
+{
+  "state": "running",
+  "visibility_timeout": 1800
+}
+```
+
+The server can direct a worker to change state by returning a different `state` value (e.g., `"quiet"` or `"terminate"`). This enables server-initiated graceful shutdown.
+
+## Visibility Timeout
+
+When a worker fetches a job, it is reserved for that worker via a visibility timeout (default: 1800 seconds / 30 minutes). If the worker does not ACK or FAIL the job within this period, the backend assumes the worker has crashed and makes the job available again.
+
+Workers can extend the visibility timeout by sending heartbeats that include the job's ID in `active_job_ids`. Each heartbeat resets the visibility timer for reported jobs.
+
+## FETCH Semantics
+
+Workers fetch jobs by polling the backend:
+
+```bash
+POST /ojs/v1/jobs/fetch
+{
+  "queues": ["critical", "default"],
+  "count": 5
+}
+```
+
+The backend atomically claims up to `count` jobs, transitioning them from `available` to `active`. Jobs are returned in priority order within each queue, and queues are consumed in the order specified.
+
+## Concurrency
+
+Workers declare a concurrency limit (default: 10) during registration. The worker MUST enforce this limit locally—it MUST NOT fetch new jobs when at capacity.
+
+## Graceful Shutdown
+
+Workers handle operating system signals for coordinated shutdown:
+
+| Signal | Action |
+|--------|--------|
+| `SIGTERM` | Begin graceful shutdown (quiet → terminate after grace period) |
+| `SIGINT` | Same as SIGTERM |
+| `SIGTSTP` | Enter quiet mode only (stop fetching, keep processing) |
+| `SIGCONT` | Resume from quiet mode to running |
+
+The default grace period is 25 seconds, aligned with Kubernetes' default `terminationGracePeriodSeconds` of 30 seconds (leaving 5 seconds for container cleanup).
+
+### Shutdown Sequence
+
+1. Receive SIGTERM
+2. Transition to `quiet` — stop fetching new jobs
+3. Wait for in-flight jobs to complete (up to grace period)
+4. After grace period, transition to `terminate` — report incomplete jobs as failed
+5. Deregister from backend
+6. Exit
+
+## Dead Worker Recovery
+
+The backend detects dead workers via heartbeat timeout (default: 30 seconds). When a worker misses its heartbeat:
+
+1. Mark the worker as `terminated`
+2. Recover jobs from the worker's last reported `active_job_ids`
+3. Transition recovered jobs to `available` (counting as a failed attempt)
+
+This ensures no job is permanently lost due to a worker crash.
+
+## Example: Normal Flow
+
+```
+Worker                          Backend
+  |                                |
+  |-- POST /workers/register ----->|  Register
+  |<--- 200 OK -------------------|
+  |                                |
+  |-- POST /jobs/fetch ----------->|  Fetch jobs
+  |<--- [job1, job2] --------------|
+  |                                |
+  |   (processing job1...)         |
+  |                                |
+  |-- POST /workers/heartbeat ---->|  Heartbeat (active: [job1, job2])
+  |<--- {state: "running"} --------|
+  |                                |
+  |-- POST /jobs/{id}/ack -------->|  Complete job1
+  |<--- 200 OK -------------------|
+  |                                |
+  |-- POST /jobs/{id}/ack -------->|  Complete job2
+  |<--- 200 OK -------------------|
+```
