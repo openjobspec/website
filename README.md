@@ -1,5 +1,7 @@
 # Open Job Spec Website
 
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 The documentation website for [Open Job Spec](https://openjobspec.org), built with [Astro](https://astro.build) and [Starlight](https://starlight.astro.build).
 
 ## Development
