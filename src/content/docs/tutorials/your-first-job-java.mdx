@@ -1,0 +1,319 @@
+---
+title: "Tutorial: Your First Job in Java"
+description: Build a complete background job system with Java 21+ from scratch.
+---
+
+This tutorial walks you through building a background job system with the Java SDK. You will enqueue, process, and monitor jobs using modern Java — records, virtual threads, and zero required dependencies.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [Java](https://openjdk.org/projects/jdk/21/) 21 or later
+- [Maven](https://maven.apache.org/) or [Gradle](https://gradle.org/)
+- A running OJS server (see [Quickstart Step 1](/getting-started/quickstart/#step-1-start-the-ojs-server))
+
+## Step 1: Initialize the project
+
+### Maven
+
+```bash
+mkdir ojs-java-tutorial && cd ojs-java-tutorial
+```
+
+Create a `pom.xml`:
+
+```xml
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example</groupId>
+    <artifactId>ojs-tutorial</artifactId>
+    <version>1.0.0</version>
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.openjobspec</groupId>
+            <artifactId>ojs-sdk</artifactId>
+            <version>0.1.0</version>
+        </dependency>
+    </dependencies>
+</project>
+```
+
+### Gradle
+
+Alternatively, add to your `build.gradle.kts`:
+
+```kotlin
+implementation("org.openjobspec:ojs-sdk:0.1.0")
+```
+
+## Step 2: Enqueue a job
+
+Create `src/main/java/com/example/Enqueue.java`:
+
+```java
+// src/main/java/com/example/Enqueue.java
+package com.example;
+
+import org.openjobspec.ojs.*;
+import java.util.Map;
+
+public class Enqueue {
+    public static void main(String[] args) {
+        var client = OJSClient.builder()
+            .url("http://localhost:8080")
+            .build();
+
+        // Enqueue a job of type "email.send" on the "default" queue
+        var job = client.enqueue("email.send",
+            Map.of("to", "user@example.com", "template", "welcome"));
+
+        System.out.printf("Enqueued job %s in state: %s%n", job.id(), job.state());
+    }
+}
+```
+
+Run it:
+
+```bash
+mvn compile exec:java -Dexec.mainClass="com.example.Enqueue"
+```
+
+You should see:
+
+```
+Enqueued job 019461a8-1a2b-7c3d-8e4f-5a6b7c8d9e0f in state: available
+```
+
+## Step 3: Build a worker
+
+Create `src/main/java/com/example/Worker.java`:
+
+```java
+// src/main/java/com/example/Worker.java
+package com.example;
+
+import org.openjobspec.ojs.*;
+import java.util.List;
+import java.util.Map;
+
+public class Worker {
+    public static void main(String[] args) {
+        // Create a worker that polls the "default" queue
+        var worker = OJSWorker.builder()
+            .url("http://localhost:8080")
+            .queues(List.of("default"))
+            .concurrency(5)
+            .build();
+
+        // Register a handler for "email.send" jobs
+        worker.register("email.send", ctx -> {
+            var to = (String) ctx.job().argsMap().get("to");
+            var template = (String) ctx.job().argsMap().get("template");
+            System.out.printf("Sending '%s' email to %s%n", template, to);
+
+            // Your email logic goes here
+            return Map.of("delivered", true);
+        });
+
+        // Graceful shutdown on SIGTERM/SIGINT
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("\nShutting down worker...");
+            worker.stop();
+        }));
+
+        System.out.println("Worker started, waiting for jobs...");
+        worker.start();
+    }
+}
+```
+
+Run the worker:
+
+```bash
+mvn compile exec:java -Dexec.mainClass="com.example.Worker"
+```
+
+Output:
+
+```
+Worker started, waiting for jobs...
+Sending 'welcome' email to user@example.com
+```
+
+## Step 4: Add retry logic
+
+Modify the enqueue call to add a retry policy:
+
+```java
+var job = client.enqueue("email.send",
+        Map.of("to", "user@example.com", "template", "welcome"))
+    .queue("default")
+    .retry(RetryPolicy.builder()
+        .maxAttempts(5)
+        .backoff("exponential")
+        .build())
+    .send();
+```
+
+If the worker handler throws an exception, the job transitions to `retryable` and is automatically rescheduled with exponential backoff.
+
+## Step 5: Add middleware
+
+Add logging and timing middleware to the worker:
+
+```java
+// src/main/java/com/example/WorkerWithMiddleware.java
+package com.example;
+
+import org.openjobspec.ojs.*;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+
+public class WorkerWithMiddleware {
+    public static void main(String[] args) {
+        var worker = OJSWorker.builder()
+            .url("http://localhost:8080")
+            .queues(List.of("default"))
+            .concurrency(5)
+            .build();
+
+        // Middleware: log every job with timing
+        worker.use((ctx, next) -> {
+            var start = Instant.now();
+            System.out.printf("[START] %s (%s)%n", ctx.job().type(), ctx.job().id());
+
+            try {
+                next.handle(ctx);
+                var elapsed = Duration.between(start, Instant.now()).toMillis();
+                System.out.printf("[DONE]  %s took %dms%n", ctx.job().type(), elapsed);
+            } catch (Exception e) {
+                var elapsed = Duration.between(start, Instant.now()).toMillis();
+                System.out.printf("[FAIL]  %s after %dms: %s%n",
+                    ctx.job().type(), elapsed, e.getMessage());
+                throw e;
+            }
+        });
+
+        // Middleware: error enrichment
+        worker.use((ctx, next) -> {
+            try {
+                next.handle(ctx);
+            } catch (Exception e) {
+                throw new RuntimeException(
+                    "job=%s id=%s attempt=%d: %s".formatted(
+                        ctx.job().type(), ctx.job().id(),
+                        ctx.job().attempt(), e.getMessage()), e);
+            }
+        });
+
+        worker.register("email.send", ctx -> {
+            var to = (String) ctx.job().argsMap().get("to");
+            System.out.printf("  Sending email to %s%n", to);
+            return Map.of("delivered", true);
+        });
+
+        Runtime.getRuntime().addShutdownHook(new Thread(worker::stop));
+
+        System.out.println("Worker started with middleware, waiting for jobs...");
+        worker.start();
+    }
+}
+```
+
+## Step 6: Use workflows
+
+Create workflows with chain (sequential) and group (parallel) primitives:
+
+```java
+// src/main/java/com/example/Workflows.java
+package com.example;
+
+import org.openjobspec.ojs.*;
+import java.util.Map;
+
+public class Workflows {
+    public static void main(String[] args) {
+        var client = OJSClient.builder()
+            .url("http://localhost:8080")
+            .build();
+
+        // Chain: sequential execution (A → B → C)
+        var chain = Workflow.chain("order-processing",
+            Workflow.step("order.validate", Map.of("order_id", "ord_123")),
+            Workflow.step("payment.charge", Map.of()),
+            Workflow.step("notification.send", Map.of())
+        );
+        var chainResult = client.createWorkflow(chain);
+        System.out.printf("Chain workflow: %s%n", chainResult.id());
+
+        // Group: parallel execution
+        var group = Workflow.group("multi-export",
+            Workflow.step("export.csv", Map.of("report_id", "rpt_456")),
+            Workflow.step("export.pdf", Map.of("report_id", "rpt_456"))
+        );
+        var groupResult = client.createWorkflow(group);
+        System.out.printf("Group workflow: %s%n", groupResult.id());
+
+        // Batch: parallel with callbacks
+        var batch = Workflow.batch("bulk-email",
+            Workflow.callbacks()
+                .onComplete(Workflow.step("batch.report", Map.of()))
+                .onFailure(Workflow.step("batch.alert", Map.of())),
+            Workflow.step("email.send", Map.of("to", "user1@example.com")),
+            Workflow.step("email.send", Map.of("to", "user2@example.com"))
+        );
+        var batchResult = client.createWorkflow(batch);
+        System.out.printf("Batch workflow: %s%n", batchResult.id());
+    }
+}
+```
+
+## Step 7: Check job status
+
+```java
+// src/main/java/com/example/Status.java
+package com.example;
+
+import org.openjobspec.ojs.*;
+
+public class Status {
+    public static void main(String[] args) {
+        if (args.length < 1) {
+            System.err.println("Usage: Status <job-id>");
+            System.exit(1);
+        }
+
+        var client = OJSClient.builder()
+            .url("http://localhost:8080")
+            .build();
+
+        var job = client.getJob(args[0]);
+        System.out.printf("Job %s:%n", job.id());
+        System.out.printf("  Type:    %s%n", job.type());
+        System.out.printf("  State:   %s%n", job.state());
+        System.out.printf("  Attempt: %d%n", job.attempt());
+    }
+}
+```
+
+## What you built
+
+- A **Java client** that enqueues jobs to an OJS server
+- A **Java worker** that processes jobs with virtual thread concurrency and graceful shutdown
+- **Retry policies** for automatic failure recovery
+- **Middleware** for logging, timing, and error enrichment
+- **Workflows** with chain, group, and batch orchestration
+- **Job status inspection** for monitoring
+
+## Next steps
+
+- Add [workflow orchestration](/tutorials/workflow-patterns/) with advanced patterns
+- Explore [scheduled jobs](/spec/scheduling/) for delayed and cron execution
+- Use [unique jobs](/spec/unique-jobs/) for deduplication
+- Read the [Java SDK source](https://github.com/openjobspec/ojs-java-sdk) for the full API
