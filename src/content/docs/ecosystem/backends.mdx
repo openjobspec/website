@@ -1,22 +1,22 @@
 ---
 title: Backends
-description: Redis and PostgreSQL backend implementations with feature comparison and deployment guides.
+description: Official backend implementations with feature comparison and deployment guides.
 ---
 
-OJS is backend-agnostic. The specification defines the behavioral contract, and backends implement it. Two official backends are available, both supporting all five conformance levels.
+OJS is backend-agnostic. The specification defines the behavioral contract, and backends implement it. Five official backends are available, all supporting all five conformance levels.
 
 ## Backend comparison
 
-| Feature | Redis | PostgreSQL |
-|---------|-------|------------|
-| **Storage engine** | Redis 7.0+ | PostgreSQL 15+ |
-| **Atomicity** | Lua scripts | SQL transactions |
-| **Dequeue strategy** | ZPOPMIN / sorted sets | `SELECT FOR UPDATE SKIP LOCKED` |
-| **Persistence** | RDB + AOF (configurable) | WAL (always durable) |
-| **Horizontal scaling** | Redis Cluster | Read replicas, Citus |
-| **Real-time notifications** | Pub/Sub | LISTEN/NOTIFY |
-| **Conformance level** | Level 4 (Full) | Level 4 (Full) |
-| **Best for** | High throughput, low latency | Durability, existing Postgres infrastructure |
+| Feature | Redis | PostgreSQL | NATS | Kafka | SQS |
+|---------|-------|------------|------|-------|-----|
+| **Storage engine** | Redis 7.0+ | PostgreSQL 15+ | NATS JetStream + KV | Kafka + Redis | AWS SQS + DynamoDB |
+| **Atomicity** | Lua scripts | SQL transactions | JetStream ack | Kafka offsets + Redis Lua | SQS visibility timeout |
+| **Dequeue strategy** | ZPOPMIN / sorted sets | `SELECT FOR UPDATE SKIP LOCKED` | JetStream pull consumers | Kafka consumer groups | SQS `ReceiveMessage` |
+| **Persistence** | RDB + AOF (configurable) | WAL (always durable) | JetStream file store | Kafka log + Redis | SQS (managed) + DynamoDB |
+| **Horizontal scaling** | Redis Cluster | Read replicas, Citus | NATS clustering | Kafka partitions | Auto-scaling (managed) |
+| **Real-time notifications** | Pub/Sub | LISTEN/NOTIFY | NATS subjects | Kafka topics | SQS long polling |
+| **Conformance level** | Level 4 (Full) | Level 4 (Full) | Level 4 (Full) | Level 4 (Full) | Level 4 (Full) |
+| **Best for** | High throughput, low latency | Durability, existing Postgres infrastructure | Lightweight, single-binary | Event streaming, high durability | AWS-native, serverless |
 
 ## Redis backend
 
@@ -144,6 +144,216 @@ make build        # Builds to bin/ojs-server
 make test         # Runs tests with race detector
 make lint         # Runs go vet
 make docker-up    # Starts via Docker Compose
+```
+
+---
+
+## NATS backend
+
+The NATS backend (`ojs-backend-nats`) uses NATS JetStream for message delivery and JetStream-backed Key-Value stores for state management. It is a lightweight, single-binary solution with no external dependencies beyond a NATS server.
+
+### When to use NATS
+
+- You want a lightweight, operationally simple deployment (single binary + NATS).
+- You need built-in clustering and multi-region support without additional tooling.
+- You prefer a unified messaging and state platform.
+- You want fast startup and low resource footprint.
+
+### Architecture
+
+The NATS backend follows the same three-layer structure:
+
+- **`internal/api/`** handles HTTP requests using the chi router.
+- **`internal/core/`** defines business logic interfaces.
+- **`internal/nats/`** implements those interfaces using JetStream streams and KV buckets.
+
+Jobs are stored in a JetStream KV bucket (`ojs-jobs`). Queues use JetStream subjects (`ojs.queue.{name}.jobs`). Background schedulers handle promotion of scheduled jobs (1s interval), retry promotion (200ms), stalled job reaping (500ms), and cron scheduling (10s).
+
+### Quick start
+
+```yaml
+# docker-compose.yml
+services:
+  nats:
+    image: nats:2-alpine
+    command: --jetstream
+    ports:
+      - "4222:4222"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-nats:latest
+    ports:
+      - "8080:8080"
+    environment:
+      NATS_URL: nats://nats:4222
+```
+
+```bash
+docker compose up -d
+curl http://localhost:8080/ojs/v1/health
+```
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `NATS_URL` | `nats://localhost:4222` | NATS connection string |
+| `PORT` | `8080` | HTTP server port |
+
+### Building from source
+
+```bash
+cd ojs-backend-nats
+make build        # Builds to bin/ojs-server
+make test         # Runs tests with race detector
+make lint         # Runs go vet
+make docker-up    # Starts via Docker Compose
+```
+
+---
+
+## Kafka backend
+
+The Kafka backend (`ojs-backend-kafka`) uses a hybrid architecture: Kafka handles message transport and durability while Redis provides per-job state management. This combination delivers Kafka's streaming strengths with the random-access state operations that job processing requires.
+
+### When to use Kafka
+
+- You already run Kafka and want to consolidate on a single messaging platform.
+- You need extremely high throughput (50,000+ jobs/sec per partition).
+- You want durable, replayable job history via Kafka's log.
+- Event streaming and job processing coexist in your architecture.
+
+### Architecture
+
+The Kafka backend uses a hybrid storage model:
+
+- **Kafka** handles enqueue (produce), dequeue (consume), and provides durable ordered storage via topics.
+- **Redis** manages per-job state, visibility timeouts, unique constraints, workflows, and cron schedules.
+
+Topics follow the pattern `ojs.queue.{name}` for job queues, `ojs.queue.{name}.retry` for retry queues, `ojs.dead.{name}` for dead letters, and `ojs.events` for lifecycle events.
+
+### Quick start
+
+```yaml
+# docker-compose.yml
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      CLUSTER_ID: kafka-ojs-cluster-001
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-kafka:latest
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_URL: redis://redis:6379
+```
+
+```bash
+docker compose up -d
+curl http://localhost:8080/ojs/v1/health
+```
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `KAFKA_BROKERS` | `localhost:9092` | Comma-separated Kafka broker addresses |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection for state management |
+| `PORT` | `8080` | HTTP server port |
+
+### Building from source
+
+```bash
+cd ojs-backend-kafka
+make build        # Builds to bin/ojs-server
+make test         # Runs tests with race detector
+make lint         # Runs go vet
+make docker-up    # Starts via Docker Compose
+```
+
+---
+
+## SQS backend
+
+The SQS backend (`ojs-backend-sqs`) uses AWS SQS for message transport and DynamoDB for state management. It is designed for AWS-native deployments and supports local development via LocalStack.
+
+### When to use SQS
+
+- You are deploying on AWS and want fully managed infrastructure.
+- You need serverless-compatible job processing (Lambda consumers).
+- You want automatic scaling without capacity planning.
+- You prefer pay-per-use pricing over provisioned infrastructure.
+
+### Architecture
+
+The SQS backend uses a hybrid storage model:
+
+- **SQS** handles enqueue (SendMessage), dequeue (ReceiveMessage), visibility timeout management, and dead letter queues.
+- **DynamoDB** manages job metadata, workflow state, cron schedules, and unique constraints.
+
+SQS queues follow the pattern `ojs-{name}` with optional FIFO queues (`ojs-{name}.fifo`) for strict ordering. Terraform modules are provided for AWS infrastructure provisioning.
+
+### Quick start
+
+```yaml
+# docker-compose.yml (LocalStack for local development)
+services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs,dynamodb
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-sqs:latest
+    ports:
+      - "8080:8080"
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://localstack:4566
+      DYNAMODB_TABLE: ojs-jobs
+      SQS_QUEUE_PREFIX: ojs
+```
+
+```bash
+docker compose up -d
+curl http://localhost:8080/ojs/v1/health
+```
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `AWS_REGION` | `us-east-1` | AWS region |
+| `AWS_ENDPOINT_URL` | — | Custom endpoint (LocalStack: `http://localhost:4566`) |
+| `DYNAMODB_TABLE` | `ojs-jobs` | DynamoDB table name |
+| `SQS_QUEUE_PREFIX` | `ojs` | SQS queue name prefix |
+| `SQS_USE_FIFO` | `false` | Use FIFO queues for ordering guarantees |
+| `PORT` | `8080` | HTTP server port |
+
+### Building from source
+
+```bash
+cd ojs-backend-sqs
+make build        # Builds to bin/ojs-server
+make test         # Runs tests with race detector
+make lint         # Runs go vet
+make docker-up    # Starts via Docker Compose (LocalStack)
 ```
 
 ---

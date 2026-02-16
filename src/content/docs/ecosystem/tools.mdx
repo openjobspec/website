@@ -1,9 +1,134 @@
 ---
 title: Tools
-description: Conformance test suite, JSON schemas, protobuf definitions, and development tools.
+description: CLI, admin dashboard, playground, conformance tests, JSON schemas, and protobuf definitions.
 ---
 
-The OJS ecosystem includes several tools for validation, testing, code generation, and development.
+The OJS ecosystem includes tools for operations, development, validation, testing, and code generation.
+
+## CLI
+
+**Repository:** `ojs-cli/`
+**Language:** Go
+
+The OJS CLI (`ojs`) is a command-line tool for managing jobs, queues, workers, cron schedules, and workflows against any OJS-compliant backend.
+
+### Installation
+
+```bash
+go install github.com/openjobspec/ojs-cli@latest
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `ojs enqueue` | Enqueue a job |
+| `ojs status <id>` | Get job status |
+| `ojs cancel <id>` | Cancel a job |
+| `ojs queues` | List queues and stats |
+| `ojs queues pause <name>` | Pause a queue |
+| `ojs queues resume <name>` | Resume a queue |
+| `ojs workers` | List active workers |
+| `ojs workers quiet <id>` | Quiet a worker |
+| `ojs cron list` | List cron schedules |
+| `ojs cron register` | Register a cron job |
+| `ojs workflows` | List workflows |
+| `ojs dead-letter` | List dead letter jobs |
+| `ojs dead-letter retry <id>` | Retry a dead letter job |
+| `ojs monitor` | Live monitoring dashboard |
+
+### Usage
+
+```bash
+# Enqueue a job
+ojs enqueue --type email.send --args '["user@example.com","Welcome!"]'
+
+# Check status
+ojs status 01961234-5678-7abc-def0-123456789abc
+
+# Monitor live
+ojs monitor --url http://localhost:8080
+
+# Output as JSON
+ojs queues --format json
+```
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `OJS_URL` | `http://localhost:8080` | OJS server URL |
+| `OJS_FORMAT` | `table` | Output format (`table` or `json`) |
+
+---
+
+## Admin UI
+
+**Repository:** `ojs-admin-ui/`
+**Language:** TypeScript (React 19 + Vite)
+
+A universal web dashboard for managing any OJS backend. The Admin UI auto-discovers backend capabilities via the OJS manifest and adapts its interface accordingly.
+
+### Features
+
+- **Dashboard** — Real-time job statistics, throughput charts, queue depth gauges
+- **Queues** — View, pause, resume, purge queues with live stats
+- **Jobs** — Search, filter, inspect, cancel, retry individual jobs
+- **Workers** — Monitor active workers, send quiet/terminate signals
+- **Dead Letter** — Browse, retry, delete dead letter jobs
+- **Dark Mode** — System-aware theme with manual toggle
+- **Auto-refresh** — Configurable polling interval for live updates
+
+### Deployment
+
+The Admin UI can be served as static files by any OJS backend at `/ojs/admin`, or run standalone:
+
+```bash
+cd ojs-admin-ui
+npm install
+npm run dev         # Development server
+npm run build       # Production build to dist/
+```
+
+Backends can embed the UI:
+
+```go
+import "github.com/openjobspec/ojs-admin-ui"
+
+mountOJSAdmin(element, { baseUrl: "", basename: "/ojs/admin" })
+```
+
+---
+
+## Playground
+
+**Repository:** `ojs-playground/`
+**URL:** [play.openjobspec.org](https://play.openjobspec.org)
+
+An interactive development environment for exploring OJS without any local setup.
+
+### Browser mode
+
+The playground runs entirely in the browser and includes:
+
+- **Schema editor** — Monaco-based editor with OJS JSON Schema validation
+- **State machine visualization** — Interactive job lifecycle diagram (React Flow)
+- **Retry timeline** — Visual retry backoff calculator (Recharts)
+- **Code generation** — Generate SDK code from job definitions (Go, TypeScript, Python, Java, Rust, Ruby)
+- **Templates** — Pre-built examples for common patterns
+
+### Local mode
+
+For testing against real backends:
+
+```bash
+cd ojs-playground
+docker compose up
+```
+
+Local mode starts a Go backend and executes jobs with real state transitions, streamed to the browser via SSE.
+
+---
 
 ## Conformance test suite
 
