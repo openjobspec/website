@@ -6,3 +6,6 @@ dist/
 
 # Astro
 .astro/
+
+# Vercel
+.vercel/
