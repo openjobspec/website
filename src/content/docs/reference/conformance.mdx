@@ -1,0 +1,119 @@
+---
+title: "Conformance"
+description: "Conformance levels, tiers, test methodology, and badge program"
+---
+
+The conformance specification defines five levels, three tiers, and a test methodology for validating OJS backend implementations. Conformance ensures interoperability across backends and SDKs.
+
+## Conformance Levels
+
+Each level is a superset of the previous:
+
+| Level | Name | Key Requirements |
+|-------|------|-----------------|
+| 0 | Core | Enqueue (PUSH), fetch (FETCH), acknowledge (ACK), fail (FAIL/NACK), health check, queue listing |
+| 1 | Lifecycle | Job info, cancel, dead letter, heartbeat, state transitions, worker registration |
+| 2 | Scheduling | Delayed jobs (`scheduled_at`), cron job registration, timezone handling, overlap policies |
+| 3 | Orchestration | Chain (sequential), group (parallel fan-out/fan-in), batch (parallel with callbacks) |
+| 4 | Advanced | Batch enqueue, unique jobs, priority ordering, queue pause/resume, queue stats, rate limiting |
+
+## Conformance Tiers
+
+| Tier | Scope | Description |
+|------|-------|-------------|
+| Parser | Data validation | Validates job envelope parsing, error responses, and schema compliance |
+| Runtime | Behavioral | Validates state transitions, timing, retries, and lifecycle behavior |
+| Full | Complete | Parser + Runtime + performance and stress requirements |
+
+## Conformance Manifest
+
+Backends declare their conformance level in a machine-readable manifest:
+
+```bash
+curl http://localhost:8080/ojs/manifest
+```
+
+```json
+{
+  "specversion": "1.0.0-rc.1",
+  "conformance": {
+    "level": 4,
+    "tier": "full"
+  },
+  "extensions": [
+    { "name": "retry", "version": "1.0.0" },
+    { "name": "workflows", "version": "1.0.0" },
+    { "name": "unique-jobs", "version": "1.0.0" }
+  ]
+}
+```
+
+## Test Suite
+
+The conformance test suite (`ojs-conformance/`) contains language-agnostic JSON test definitions executed via HTTP against a running backend.
+
+### Test Structure
+
+```json
+{
+  "name": "enqueue_minimal_job",
+  "level": 0,
+  "description": "Enqueue a job with only required fields",
+  "request": {
+    "method": "POST",
+    "path": "/ojs/v1/jobs",
+    "headers": { "Content-Type": "application/openjobspec+json" },
+    "body": { "type": "test.hello", "args": ["world"] }
+  },
+  "response": {
+    "status": 201,
+    "body": {
+      "id": { "matches": "^[0-9a-f-]{36}$" },
+      "state": "available",
+      "type": "test.hello"
+    }
+  }
+}
+```
+
+### Running Tests
+
+```bash
+# Against any OJS server
+cd ojs-conformance
+OJS_URL=http://localhost:8080 go test ./runner/http/ -v
+
+# Against the Redis backend
+cd ojs-backend-redis
+make conformance                # All levels
+make conformance-level-0        # Just Level 0
+```
+
+### Validation Matchers
+
+| Matcher | Description |
+|---------|-------------|
+| `equals` | Exact value match |
+| `matches` | Regex pattern match |
+| `exists` | Field is present |
+| `gte` / `lte` | Numeric comparisons |
+| `contains` | Array contains value |
+| `within` | Timing assertion (value within tolerance) |
+
+## Level 0 Requirements
+
+The minimum viable OJS backend must support:
+
+1. `POST /ojs/v1/jobs` — Enqueue a job
+2. `POST /ojs/v1/jobs/fetch` — Fetch jobs for processing
+3. `POST /ojs/v1/jobs/{id}/ack` — Acknowledge success
+4. `POST /ojs/v1/jobs/{id}/fail` — Report failure
+5. `GET /ojs/v1/health` — Health check
+6. `GET /ojs/v1/queues` — List queues
+7. Proper error responses (400, 404, 409, 422)
+8. UUIDv7 job IDs
+9. RFC 3339 timestamps in UTC
+
+## Building a Conformant Backend
+
+Start with Level 0 and work up. The conformance tests serve as both specification and acceptance criteria. See the [Implement a Backend](/guides/implement-a-backend/) guide for a step-by-step walkthrough.

@@ -1,0 +1,109 @@
+---
+title: "Migration Guide"
+description: "Step-by-step migration from Sidekiq, BullMQ, Celery, and other job systems"
+---
+
+This guide covers migrating from existing job processing systems to OJS. Each section maps the source system's concepts to OJS equivalents and provides a phased migration strategy.
+
+## Migration Strategy
+
+All migrations follow a four-phase approach:
+
+1. **Dual-write**: Enqueue jobs to both the old system and OJS simultaneously.
+2. **Shadow mode**: Process jobs from OJS but discard results; compare with old system.
+3. **Cutover**: Switch to OJS as the primary job processor.
+4. **Rollback plan**: Keep the old system available for quick revert if needed.
+
+## Sidekiq (Ruby/Redis)
+
+### Concept Mapping
+
+| Sidekiq | OJS | Notes |
+|---------|-----|-------|
+| `perform_async(args)` | `enqueue(type, args)` | OJS uses `args` array, not positional params |
+| `class MyWorker` | Job type string (`"my.worker"`) | No class needed—just a type string |
+| `sidekiq_options queue: 'critical'` | `{ "queue": "critical" }` | Queue is a field on the envelope |
+| `retry: 5` | `{ "retry": { "max_attempts": 6 } }` | OJS counts total attempts (5 retries = 6 attempts) |
+| `sidekiq_retry_in` | `backoff_coefficient` | OJS uses policy-based backoff |
+| `DeadSet` | Dead letter queue API | Similar concept, different API |
+
+### Key Differences
+
+- Sidekiq uses `retry: true` (default 25) vs `retry: 5` vs `retry: false`. OJS always uses explicit `max_attempts`.
+- Sidekiq's `retry: 25` means 26 total executions. OJS's `max_attempts: 25` means exactly 25.
+- Sidekiq middleware uses `yield` for the onion model. OJS uses `next()`.
+
+## BullMQ (Node.js/Redis)
+
+### Concept Mapping
+
+| BullMQ | OJS | Notes |
+|--------|-----|-------|
+| `queue.add(name, data)` | `enqueue(type, args)` | `data` (object) → `args` (array) |
+| `new Queue('myQueue')` | `{ "queue": "myQueue" }` | Queue per job, not per queue instance |
+| `new Worker(queue, handler)` | `worker.register(type, handler)` | OJS registers by type, not queue |
+| `attempts: 3` | `{ "retry": { "max_attempts": 3 } }` | Same semantics |
+| `backoff: { type: 'exponential' }` | `backoff_coefficient: 2.0` | Configurable coefficient |
+| `delay: 5000` | `{ "scheduled_at": "..." }` | OJS uses ISO 8601 timestamp |
+| `FlowProducer` | Workflows API | Chain, group, batch |
+
+### Key Differences
+
+- BullMQ uses `data` (object). OJS uses `args` (array). Wrap your data: `args: [data]`.
+- BullMQ creates separate `Queue` and `Worker` instances per queue. OJS workers can consume multiple queues.
+
+## Celery (Python)
+
+### Concept Mapping
+
+| Celery | OJS | Notes |
+|--------|-----|-------|
+| `@task` decorator | Job type string | No decorator—register handler by type |
+| `task.delay(args)` | `enqueue(type, args)` | Similar call pattern |
+| `chain(t1 \| t2 \| t3)` | `{ "type": "chain", "steps": [...] }` | Declarative workflow |
+| `group(t1, t2, t3)` | `{ "type": "group", "steps": [...] }` | Same concept |
+| `chord(group, callback)` | `{ "type": "batch", ... }` | OJS batch = Celery chord |
+| `max_retries=3` | `{ "retry": { "max_attempts": 4 } }` | Celery counts retries, OJS counts attempts |
+| `countdown=60` | `{ "scheduled_at": "..." }` | ISO 8601 instead of seconds |
+
+### Key Differences
+
+- Celery uses separate broker (Redis/RabbitMQ) and result backend. OJS combines both in a single backend.
+- Celery's `max_retries=3` means 4 total attempts. OJS's `max_attempts=4` means the same.
+- Celery uses Python decorators for task registration. OJS uses explicit handler registration.
+
+## Faktory (Polyglot)
+
+### Concept Mapping
+
+| Faktory | OJS | Notes |
+|---------|-----|-------|
+| `push(job)` | `enqueue(type, args)` | Similar push model |
+| `job.type` | `type` | Same concept |
+| `job.args` | `args` | Same concept |
+| `retry: 5` | `max_attempts: 5` | Same semantics |
+| Mutate API | Admin API | Similar operational tools |
+
+Faktory is the closest existing system to OJS in design philosophy. Migration is straightforward.
+
+## River (Go/PostgreSQL)
+
+### Concept Mapping
+
+| River | OJS | Notes |
+|-------|-----|-------|
+| `river.InsertTx(tx, args)` | Outbox pattern + enqueue | OJS supports transactional enqueue via framework adapters |
+| `river.JobArgs` struct | Job type + args array | OJS uses type string instead of Go struct |
+| `MaxAttempts: 5` | `max_attempts: 5` | Same |
+
+### Key Differences
+
+- River is tightly coupled to PostgreSQL. OJS is backend-agnostic.
+- River uses Go structs for job arguments. OJS uses a JSON array.
+
+## Common Pitfalls
+
+1. **Off-by-one retry counts**: Carefully map between "retries" (Sidekiq/Celery) and "attempts" (OJS).
+2. **Object vs array**: OJS uses `args` (array), not `payload` (object). Wrap objects: `args: [payload]`.
+3. **Queue per type vs type per queue**: OJS workers register handlers by job type, not by queue.
+4. **Implicit vs explicit**: OJS favors explicit configuration over magic defaults.

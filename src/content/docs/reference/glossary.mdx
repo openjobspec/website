@@ -1,0 +1,83 @@
+---
+title: "Glossary"
+description: "Canonical definitions for OJS terminology"
+---
+
+## Core Concepts
+
+| Term | Definition |
+|------|-----------|
+| **Backend** | A server implementation of the OJS specification that stores and manages jobs. Examples: ojs-backend-redis, ojs-backend-postgres. |
+| **Client** | An SDK component that produces jobs. The client enqueues jobs by sending them to the backend via HTTP or gRPC. |
+| **Handler** | A function registered by a worker to process a specific job type. |
+| **Job** | A unit of work described by a job envelope. Contains a type, arguments, and metadata. |
+| **Job Envelope** | The complete data structure representing a job, including all required and optional fields. |
+| **Middleware** | A composable function that wraps enqueue or execution logic, enabling cross-cutting concerns. |
+| **Queue** | A named channel that holds jobs waiting to be processed. |
+| **Worker** | An SDK component that consumes and processes jobs from one or more queues. |
+
+## Lifecycle States
+
+| State | Definition |
+|-------|-----------|
+| **scheduled** | Job is waiting for its `scheduled_at` time to arrive. |
+| **available** | Job is ready to be fetched by a worker. |
+| **pending** | Job has been claimed by a worker but processing has not started (transitional). |
+| **active** | Job is currently being processed by a worker. |
+| **completed** | Job handler returned success. Terminal state. |
+| **retryable** | Job handler failed and the job is waiting for retry. |
+| **cancelled** | Job was cancelled before completion. Terminal state. |
+| **discarded** | Job exhausted retries and was discarded. Terminal state. |
+
+## Reliability
+
+| Term | Definition |
+|------|-----------|
+| **At-least-once** | Delivery guarantee ensuring every job is processed at least once. May result in duplicates. |
+| **Dead letter queue (DLQ)** | Storage for jobs that have permanently failed, available for inspection and manual retry. |
+| **Idempotency** | Property of a handler where processing the same job multiple times produces the same result. |
+| **Replay** | Re-enqueuing a dead letter job for another processing attempt. |
+| **Visibility timeout** | Time a fetched job is reserved for a worker before becoming available again. |
+
+## Scheduling
+
+| Term | Definition |
+|------|-----------|
+| **Cron job** | A recurring job defined by a cron expression that triggers on a schedule. |
+| **Delayed job** | A job with a future `scheduled_at` time, promoted to `available` when the time arrives. |
+| **Overlap policy** | Strategy for handling a cron trigger when the previous instance is still running. |
+
+## Worker Protocol
+
+| Term | Definition |
+|------|-----------|
+| **Heartbeat** | Periodic signal from a worker to the backend indicating it is alive and reporting active jobs. |
+| **Grace period** | Time allowed for in-flight jobs to complete during shutdown before forced termination. |
+| **Quiet mode** | Worker state where it stops fetching new jobs but continues processing in-flight jobs. |
+
+## Workflows
+
+| Term | Definition |
+|------|-----------|
+| **Chain** | Sequential workflow: each step runs after the previous completes. |
+| **Group** | Parallel workflow: all steps run concurrently, completing when all finish. |
+| **Batch** | Parallel workflow with callbacks: steps run concurrently, a callback fires on completion. |
+
+## Extensions
+
+| Term | Definition |
+|------|-----------|
+| **Backpressure** | Mechanism for handling producer overload when queues approach capacity. |
+| **Codec** | An encode/decode function pair for transforming job payloads (encryption, compression). |
+| **Conformance level** | A tier (0–4) indicating which specification features a backend implements. |
+| **Extension** | An optional specification module that adds functionality beyond the core (retry, workflows, etc.). |
+| **Rate limiting** | Controls on how fast jobs are processed, protecting downstream services. |
+| **Unique job** | A job with deduplication constraints preventing duplicate processing. |
+
+## Wire Formats & Protocols
+
+| Term | Definition |
+|------|-----------|
+| **Job args** | An array of values passed to the job handler. OJS uses `args` (array), not `payload` (object). |
+| **Meta** | A key-value map for arbitrary metadata attached to a job (trace context, tenant ID, etc.). |
+| **UUIDv7** | Time-sortable UUID format used for job IDs, providing natural chronological ordering. |

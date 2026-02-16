@@ -1,0 +1,115 @@
+---
+title: "SDK Guidelines"
+description: "Design principles, architecture patterns, and language-specific guidance for SDK implementations"
+---
+
+The SDK guidelines define the canonical patterns, naming conventions, and quality standards for OJS SDK implementations across all languages.
+
+## Design Principles
+
+1. **Idiomatic**: Use language-native patterns. A Go SDK should feel like Go, not like a Java port.
+2. **Consistent**: The same concepts have the same names across SDKs (adapted to language conventions).
+3. **Progressive disclosure**: Simple things should be simple, complex things should be possible.
+4. **Pit of success**: The default behavior should be correct and safe.
+
+## Three-Role Architecture
+
+Every SDK provides three roles:
+
+| Role | Responsibility | Key Methods |
+|------|---------------|-------------|
+| Client (Producer) | Enqueue jobs | `enqueue()`, `enqueueBatch()`, `cancel()`, `getJob()` |
+| Worker (Consumer) | Process jobs | `register()`, `start()`, `stop()` |
+| Admin (Operator) | Manage the backend | `pauseQueue()`, `listWorkers()`, `stats()` |
+
+## Naming Conventions
+
+| Concept | Go | TypeScript | Python | Java | Ruby | Rust |
+|---------|----|-----------:|--------|------|------|------|
+| Enqueue | `Enqueue` | `enqueue` | `enqueue` | `enqueue` | `enqueue` | `enqueue` |
+| Job type | `string` | `string` | `str` | `String` | `String` | `&str` |
+| Handler | `HandlerFunc` | `JobHandler` | `handler` | `JobHandler` | `handler` | `JobHandler` |
+| Middleware | `MiddlewareFunc` | `Middleware` | `middleware` | `Middleware` | `middleware` | `Middleware` |
+
+## Configuration
+
+SDKs MUST support configuration via:
+
+1. **Builder pattern** (primary)
+2. **Environment variables** (fallback)
+3. **Sensible defaults** (always)
+
+```go
+client := ojs.NewClient(
+    ojs.WithURL("http://localhost:8080"),
+    ojs.WithTimeout(30 * time.Second),
+)
+```
+
+```typescript
+const client = new OJSClient({
+  url: process.env.OJS_URL || 'http://localhost:8080',
+  timeout: 30_000,
+});
+```
+
+## Error Handling
+
+SDKs MUST provide a typed error hierarchy:
+
+| Error Type | Description |
+|------------|-------------|
+| `ConnectionError` | Cannot reach the backend |
+| `ValidationError` | Request validation failed |
+| `ConflictError` | State conflict (e.g., duplicate job) |
+| `NotFoundError` | Job or resource not found |
+| `RateLimitError` | Rate limit exceeded (includes `retry_after`) |
+| `BackendError` | Internal backend failure |
+
+Errors MUST include the original OJS error code and message for debugging.
+
+## Async Patterns
+
+Each language uses its native async model:
+
+| Language | Async Model |
+|----------|-------------|
+| Go | Goroutines + context cancellation |
+| TypeScript | `async`/`await` + `Promise` |
+| Python | `asyncio` + `async`/`await` |
+| Java | `CompletableFuture` or virtual threads |
+| Rust | `tokio` + `async`/`await` |
+| Ruby | Threads |
+
+## Middleware API
+
+SDKs MUST support both enqueue and execution middleware chains:
+
+```typescript
+worker.use(async (job, next) => {
+  console.log(`Processing ${job.type}`);
+  const start = Date.now();
+  await next();
+  console.log(`Completed in ${Date.now() - start}ms`);
+});
+```
+
+## Testing Support
+
+SDKs MUST provide testing utilities (see [Testing](/spec/testing/)):
+
+- Fake mode (in-memory, no backend)
+- Inline mode (synchronous execution)
+- Assertion helpers (`assertEnqueued`, `refuteEnqueued`)
+
+## Observability
+
+SDKs SHOULD:
+- Inject W3C Trace Context into `meta.traceparent` on enqueue
+- Extract trace context on execution and create linked spans
+- Emit structured logs with job context
+- Export OpenTelemetry metrics
+
+## Thin Client Architecture
+
+SDKs are thin HTTP wrappers. All intelligence (scheduling, retry evaluation, workflow orchestration, state management) lives in the backend server. This keeps SDKs simple, minimizes cross-language divergence, and ensures behavioral consistency.
