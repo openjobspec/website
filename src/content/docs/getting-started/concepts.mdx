@@ -203,13 +203,31 @@ OJS follows a three-layer architecture inspired by CloudEvents:
 | Layer | Document | Concern |
 |-------|----------|---------|
 | **Layer 1: Core** | [ojs-core](/spec/core/) | What a job IS: envelope, lifecycle, operations |
-| **Layer 2: Wire Format** | [ojs-json-format](/spec/json-format/) | How a job is SERIALIZED: JSON encoding rules |
-| **Layer 3: Protocol Binding** | [ojs-http-binding](/spec/http-binding/) | How a job is TRANSMITTED: HTTP endpoints |
+| **Layer 2: Wire Format** | [ojs-json-format](/spec/json-format/), [ojs-protobuf-format](/spec/protobuf-format/) | How a job is SERIALIZED: JSON/Protobuf encoding rules |
+| **Layer 3: Protocol Binding** | [ojs-http-binding](/spec/http-binding/), [ojs-grpc-binding](/spec/grpc-binding/), [ojs-amqp-binding](/spec/amqp-binding/) | How a job is TRANSMITTED: HTTP, gRPC, AMQP |
 
-This separation means you can have different wire formats (JSON, Protobuf) and different transports (HTTP, gRPC) while sharing the same core job model.
+This separation means you can have different wire formats (JSON, Protobuf) and different transports (HTTP, gRPC, AMQP) while sharing the same core job model.
+
+Extensions (retries, cron scheduling, workflows, unique jobs, middleware, events) layer on top of the core without modifying it.
+
+### Repository map
+
+The OJS ecosystem is organized into distinct components:
+
+| Component | Examples | Purpose |
+|-----------|----------|---------|
+| **Specification** | `spec/`, `ojs-json-schema/`, `ojs-proto/` | Normative documents, JSON Schema, Protobuf definitions |
+| **Backends** | `ojs-backend-redis/`, `ojs-backend-postgres/`, `ojs-backend-nats/`, `ojs-backend-kafka/`, `ojs-backend-sqs/` | 5 reference server implementations |
+| **SDKs** | `ojs-go-sdk/`, `ojs-js-sdk/`, `ojs-python-sdk/`, `ojs-java-sdk/`, `ojs-rust-sdk/`, `ojs-ruby-sdk/` | 6 language client/worker libraries |
+| **Integrations** | `ojs-*-contrib/` | Framework adapters (Rails, Django, Spring, Express, etc.) |
+| **Tools** | `ojs-cli/`, `ojs-admin-ui/`, `ojs-playground/`, `ojs-conformance/` | CLI, dashboard, playground, test suite |
+| **Infrastructure** | `ojs-k8s-operator/`, `deploy/` | K8s operator, Helm, Terraform, Grafana |
+
+For the full architecture document with diagrams, see [`ARCHITECTURE.md`](https://github.com/openjobspec/openjobspec/blob/main/ARCHITECTURE.md).
 
 ## Next steps
 
 - Follow the [Quickstart](/getting-started/quickstart/) to build a working system.
 - Read the [Core Specification](/spec/core/) for the full, normative details.
 - Explore [SDKs](/ecosystem/sdks/) for your language.
+- See the [Roadmap](/governance/roadmap/) for the project direction.
