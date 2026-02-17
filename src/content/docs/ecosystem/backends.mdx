@@ -360,7 +360,7 @@ make docker-up    # Starts via Docker Compose (LocalStack)
 
 ## Conformance levels
 
-Both official backends support all five conformance levels:
+All five official backends pass all five conformance levels:
 
 | Level | Name | Features |
 |-------|------|----------|
@@ -378,6 +378,46 @@ curl http://localhost:8080/ojs/manifest
 
 ---
 
+## Real-time & events
+
+Not all backends support the same real-time features:
+
+| Feature | Redis | PostgreSQL | NATS | Kafka | SQS |
+|---------|:-----:|:----------:|:----:|:-----:|:---:|
+| Server-Sent Events | ✅ | ❌ | ❌ | ❌ | ❌ |
+| WebSocket | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Event publishing | ✅ | ✅ | ❌ | ❌ | ❌ |
+| LISTEN/NOTIFY | ❌ | ✅ | ❌ | ❌ | ❌ |
+
+---
+
+## Security & operations
+
+All backends support common operational features:
+
+| Feature | Redis | PostgreSQL | NATS | Kafka | SQS |
+|---------|:-----:|:----------:|:----:|:-----:|:---:|
+| API key authentication | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Prometheus metrics | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Health check endpoint | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Configurable timeouts | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+---
+
+## Storage characteristics
+
+| Aspect | Redis | PostgreSQL | NATS | Kafka | SQS |
+|--------|-------|------------|------|-------|-----|
+| **Atomicity** | Lua scripts | SQL transactions | JetStream KV | Redis sidecar | DynamoDB txn |
+| **Dequeue** | Sorted set pop | SKIP LOCKED | Consumer pull | Consumer group | SQS receive |
+| **Persistence** | RDB/AOF | WAL | JetStream | Topic log | AWS managed |
+| **Horizontal scaling** | Redis Cluster | Read replicas | NATS Cluster | Partitions | Auto-scaled |
+| **Unique job support** | Redis SET NX | UNIQUE constraint | KV CAS | Redis SET NX | DynamoDB cond. |
+
+For the full feature parity matrix, see [`BACKEND_PARITY.md`](https://github.com/openjobspec/openjobspec/blob/main/BACKEND_PARITY.md).
+
+---
+
 ## Building your own backend
 
-OJS is designed to be implementable on any storage engine. See the [Implement a Backend](/guides/implement-a-backend/) guide for a step-by-step walkthrough. The [conformance test suite](/ecosystem/tools/#conformance-suite) validates your implementation against all five levels.
+OJS is designed to be implementable on any storage engine. See the [Implement a Backend](/guides/implement-a-backend/) guide for a step-by-step walkthrough. The [conformance test suite](/ecosystem/tools/#conformance-test-suite) validates your implementation against all five levels.
