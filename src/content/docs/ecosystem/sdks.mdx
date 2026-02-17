@@ -373,3 +373,18 @@ bundle exec rspec
 If your language is not listed above, you can build your own SDK. The OJS specification is designed to make SDK implementation straightforward. See the [Implement an SDK](/guides/implement-an-sdk/) guide for a detailed walkthrough.
 
 The key insight: OJS SDKs are thin HTTP wrappers. All intelligence (retry logic, scheduling, state management) lives in the server. Your SDK just needs to make HTTP requests and provide a nice API for registering handlers and polling for work.
+
+---
+
+## Experimental: WASM SDK
+
+**Repository:** `ojs-wasm-sdk/`
+**Status:** Planning phase
+
+A browser-native WebAssembly SDK is in development, targeting edge and serverless use cases:
+
+- **CloudFlare Workers** and **Vercel Edge Functions**
+- **Deno Deploy**
+- **Browser clients** (powering the [OJS Playground](https://play.openjobspec.org))
+
+The planned architecture compiles a Rust core to `wasm32-unknown-unknown`, with JavaScript bindings and TypeScript type definitions. Follow the [roadmap](/governance/roadmap/) for progress updates.
