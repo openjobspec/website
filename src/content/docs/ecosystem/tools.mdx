@@ -1,6 +1,6 @@
 ---
 title: Tools
-description: CLI, admin dashboard, playground, conformance tests, JSON schemas, and protobuf definitions.
+description: CLI, admin dashboard, playground, Kubernetes operator, CloudEvents bridge, conformance tests, JSON schemas, and protobuf definitions.
 ---
 
 The OJS ecosystem includes tools for operations, development, validation, testing, and code generation.
@@ -130,6 +130,104 @@ Local mode starts a Go backend and executes jobs with real state transitions, st
 
 ---
 
+## Kubernetes Operator
+
+**Repository:** `ojs-k8s-operator/`
+**Language:** Go
+
+The OJS Kubernetes Operator manages OJS clusters declaratively using a custom `OJSCluster` resource. It supports all backend types, auto-scaling, and integrated monitoring.
+
+### Features
+
+- **Declarative management** — Define your OJS cluster as a Kubernetes custom resource
+- **Multi-backend support** — Redis, PostgreSQL, and NATS backends with optional embedded instances
+- **Auto-scaling** — HPA-based scaling driven by queue depth and worker utilization
+- **Monitoring** — Built-in Prometheus metrics and optional Grafana dashboard provisioning
+
+### Example CRD
+
+```yaml
+apiVersion: ojs.openjobspec.org/v1alpha1
+kind: OJSCluster
+metadata:
+  name: my-ojs
+spec:
+  backend: redis
+  replicas: 3
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+  autoScaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetQueueDepth: 1000
+  monitoring:
+    enabled: true
+```
+
+### Installation
+
+```bash
+# Install the CRD and operator
+kubectl apply -f https://github.com/openjobspec/ojs-k8s-operator/releases/latest/download/install.yaml
+
+# Create a cluster
+kubectl apply -f my-ojs-cluster.yaml
+
+# Check status
+kubectl get ojsclusters
+```
+
+---
+
+## CloudEvents Bridge
+
+**Repository:** `ojs-cloudevents-bridge/`
+**Language:** Go
+
+The CloudEvents Bridge provides bidirectional mapping between [CloudEvents v1.0](https://cloudevents.io) and OJS events. It enables integration with event-driven platforms like Knative, Azure Event Grid, AWS EventBridge, and Dapr.
+
+### Packages
+
+| Package | Description |
+|---------|-------------|
+| `bridge` | Core mapping functions: `OJSToCloudEvent()`, `CloudEventToOJS()` |
+| `middleware` | HTTP middleware that intercepts incoming CloudEvents and converts them to OJS enqueue requests |
+
+### OJS → CloudEvents mapping
+
+| OJS field | CloudEvents field |
+|-----------|-------------------|
+| `event.type` | `type` (prefixed with `org.openjobspec.`) |
+| `event.source` | `source` |
+| `event.subject` | `subject` |
+| `event.data` | `data` |
+| `event.id` | `id` |
+
+### Usage
+
+```go
+import (
+    "github.com/openjobspec/ojs-cloudevents-bridge/bridge"
+    "github.com/openjobspec/ojs-cloudevents-bridge/middleware"
+)
+
+// Convert OJS event to CloudEvent
+ce := bridge.OJSToCloudEvent(ojsEvent)
+
+// Convert CloudEvent to OJS job
+job := bridge.CloudEventToOJS(cloudEvent)
+
+// HTTP middleware: auto-convert incoming CloudEvents to OJS enqueue requests
+router.Use(middleware.CloudEventInterceptor(ojsClient))
+```
+
+See the [CloudEvents Interop spec](/spec/cloudevents-interop/) for the full mapping specification.
+
+---
+
 ## Conformance test suite
 
 **Repository:** `ojs-conformance/`
@@ -248,6 +346,44 @@ Buf generates:
 
 - **Go:** Full gRPC client and server stubs with protobuf marshaling
 - **TypeScript:** Type definitions and client stubs for use with gRPC-web or Connect
+
+---
+
+## Examples & demos
+
+**Repository:** [`examples/`](https://github.com/openjobspec/openjobspec/tree/main/examples)
+
+Runnable examples for every SDK, plus full-stack and observability demos. Each example includes a Docker Compose file to start a backend, so you can run it with zero infrastructure setup.
+
+### Language quickstarts
+
+| Example | Language | What it demonstrates |
+|---------|----------|---------------------|
+| [`go-quickstart`](https://github.com/openjobspec/openjobspec/tree/main/examples/go-quickstart) | Go | Enqueue + worker with retry policy |
+| [`js-quickstart`](https://github.com/openjobspec/openjobspec/tree/main/examples/js-quickstart) | TypeScript | Enqueue + worker with middleware |
+| [`python-quickstart`](https://github.com/openjobspec/openjobspec/tree/main/examples/python-quickstart) | Python | Async enqueue + worker |
+| [`java-quickstart`](https://github.com/openjobspec/openjobspec/tree/main/examples/java-quickstart) | Java | Enqueue + worker with records |
+| [`rust-quickstart`](https://github.com/openjobspec/openjobspec/tree/main/examples/rust-quickstart) | Rust | Async enqueue + worker with tokio |
+| [`ruby-quickstart`](https://github.com/openjobspec/openjobspec/tree/main/examples/ruby-quickstart) | Ruby | Enqueue + worker |
+
+### Full-stack demo
+
+The [`full-stack-demo`](https://github.com/openjobspec/openjobspec/tree/main/examples/full-stack-demo) provides a complete end-to-end example: a Go web API enqueues jobs, a Go worker processes them, and an OJS Redis backend manages the lifecycle. Includes retry support and status polling.
+
+```bash
+cd examples/full-stack-demo
+docker compose up
+```
+
+### OpenTelemetry demo
+
+The [`otel-demo`](https://github.com/openjobspec/openjobspec/tree/main/examples/otel-demo) demonstrates distributed tracing across the full job lifecycle using OpenTelemetry and Jaeger. Shows end-to-end traces with span attributes (job ID, queue, attempts) and error tracking.
+
+```bash
+cd examples/otel-demo
+docker compose up
+# Open Jaeger UI at http://localhost:16686
+```
 
 ---
 
