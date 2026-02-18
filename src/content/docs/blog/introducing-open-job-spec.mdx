@@ -1,0 +1,131 @@
+---
+title: "Introducing Open Job Spec — A Universal Standard for Background Jobs"
+description: "Open Job Spec (OJS) is a vendor-neutral, language-agnostic standard for background job processing — like CloudEvents, but for background jobs."
+---
+
+### The Problem
+
+Every background job framework invents everything from scratch.
+
+Sidekiq has its own job format. Celery has its own. BullMQ has its own. Faktory has its own. They all define their own wire format, retry semantics, lifecycle states, and API contracts. None of them can talk to each other.
+
+This means:
+- **Migrating between frameworks** requires rewriting every job definition
+- **Polyglot teams** can't share job infrastructure across languages
+- **Backend providers** must build custom integrations for each framework
+- **Monitoring tools** need per-framework adapters
+- **Knowledge doesn't transfer** — learning Sidekiq teaches you nothing about Celery
+
+In 2018, the cloud-native community faced an identical problem with events. Every cloud provider and message broker used a different event format. The solution was **CloudEvents** — now a CNCF graduated project with 5,700+ stars and adoption across AWS, Azure, GCP, and dozens of others.
+
+Background jobs deserve the same treatment.
+
+### Introducing Open Job Spec
+
+**Open Job Spec (OJS)** is a vendor-neutral, language-agnostic standard for background job processing. It defines:
+
+- **A universal job envelope** — one schema for job metadata, arguments, and lifecycle state
+- **An 8-state lifecycle** — `scheduled → available → pending → active → completed/retryable/cancelled/discarded`
+- **Protocol bindings** — HTTP, gRPC, and AMQP
+- **Wire formats** — JSON and Protobuf
+- **Extensions** — retries, cron scheduling, workflows (chain/group/batch), unique jobs, middleware, events
+
+Think of it as **CloudEvents, but for background jobs**.
+
+### What Ships Today
+
+OJS isn't just a spec on paper. We're launching with a complete ecosystem:
+
+**📋 Specification**
+- Core spec (Release Candidate 1)
+- 15 extension specifications
+- JSON Schema validation definitions
+- Protocol Buffer / gRPC service definitions
+- OpenAPI 3.1 definition
+- 15 Architecture Decision Records (ADRs)
+
+**🖥️ 5 Reference Backend Implementations**
+- Redis (Go + Lua scripts)
+- PostgreSQL (Go + SKIP LOCKED)
+- NATS JetStream (Go)
+- Apache Kafka (Go + Redis state)
+- AWS SQS + DynamoDB (Go)
+
+All backends pass a 5-level conformance test suite that validates spec compliance.
+
+**📚 6 Official SDKs**
+- Go (zero dependencies)
+- TypeScript/JavaScript
+- Python (asyncio-native)
+- Java 21+ (records, zero required deps)
+- Rust (tokio + serde)
+- Ruby (stdlib only)
+
+**🛠️ Tools**
+- CLI for managing OJS servers
+- React admin dashboard
+- Interactive browser playground at [playground.openjobspec.org](https://playground.openjobspec.org)
+
+### Quick Start
+
+Enqueue a job in under a minute:
+
+```bash
+# Start an OJS server (Redis backend)
+docker run -d -p 8080:8080 ghcr.io/openjobspec/ojs-backend-redis:latest
+
+# Enqueue a job
+curl -X POST http://localhost:8080/ojs/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "email.send", "args": ["user@example.com", "Welcome!"], "queue": "default"}'
+```
+
+Then consume it from any language:
+
+```python
+# Python
+from ojs import Worker
+
+worker = Worker("http://localhost:8080")
+
+@worker.register("email.send")
+async def send_email(ctx):
+    email, subject = ctx.job.args
+    await actually_send_email(email, subject)
+
+worker.start()
+```
+
+```go
+// Go
+worker := ojs.NewWorker("http://localhost:8080")
+worker.Register("email.send", func(ctx ojs.JobContext) error {
+    email := ctx.Job.Args[0].(string)
+    return sendEmail(email)
+})
+worker.Start(context.Background())
+```
+
+Mix and match. Enqueue from Python, process in Go. Or vice versa. That's the point.
+
+### Why Now?
+
+Three trends make this the right time for a background job standard:
+
+1. **Polyglot is the norm.** Modern teams use multiple languages. Your API is Go, your ML pipeline is Python, your frontend SSR is TypeScript. They all need job processing.
+
+2. **Infrastructure is commoditized.** Redis, Postgres, NATS, Kafka, SQS — every team already runs one of these. OJS works with all of them.
+
+3. **Standards win.** HTTP replaced proprietary protocols. JSON replaced XML. CloudEvents replaced proprietary event formats. Background jobs are next.
+
+### What's Next
+
+OJS is Apache 2.0 licensed and community-driven. Here's how to get involved:
+
+- ⭐ **Star the repo:** [github.com/openjobspec](https://github.com/openjobspec)
+- 🎮 **Try the playground:** [playground.openjobspec.org](https://playground.openjobspec.org)
+- 💬 **Join the discussion:** [GitHub Discussions](https://github.com/openjobspec/spec/discussions)
+- 🤝 **Contribute:** We have ["good first issues"](https://github.com/search?q=org%3Aopenjobspec+label%3A%22good+first+issue%22&type=issues) across every SDK and backend
+- 📖 **Read the spec:** [openjobspec.org/spec/v1/ojs-core](https://openjobspec.org/spec/v1/ojs-core)
+
+We believe background job processing should be as standardized as HTTP requests. If you agree, we'd love your help making it happen.

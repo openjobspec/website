@@ -1,0 +1,118 @@
+---
+title: "Designing a Job Lifecycle State Machine: Why 8 States Is the Sweet Spot"
+description: "We analyzed 7 job frameworks to design the universal job lifecycle. Here's why OJS landed on exactly 8 states."
+---
+
+### The Implicit State Machine Problem
+
+Every job framework has a lifecycle, but most are implicit. States are framework-specific, transitions are under-documented, and edge cases are handled inconsistently.
+
+Consider what exists today:
+
+- **Sidekiq:** jobs are "enqueued", "busy", "dead", "retrying", "scheduled" — 5 states, loosely documented
+- **Celery:** PENDING, STARTED, SUCCESS, FAILURE, RETRY, REVOKED — 6 states
+- **BullMQ:** waiting, delayed, active, completed, failed — 5 states (plus some sub-states)
+- **Oban:** available, scheduled, executing, completed, retryable, cancelled, discarded — 7 states (closest to OJS)
+
+When you try to build monitoring, alerting, or debugging tools across these frameworks, you hit a wall. Every framework calls its states different things, defines different transitions, and handles edge cases differently. A "failed" job in one framework might be equivalent to a "retrying" job in another.
+
+We set out to design a lifecycle state machine that could serve as the universal model — one that captures the essential states every job system needs, without adding unnecessary complexity.
+
+### The Analysis: What Do Jobs Actually Need?
+
+We started by categorizing the phases a background job passes through during its lifetime. Every state falls into one of four groups:
+
+**Temporal states** — the job is waiting for something:
+- **`scheduled`** — the job has a `scheduled_at` timestamp in the future and is not yet ready for processing. Think of a "send this email at 9 AM tomorrow" job.
+- **`available`** — the job is ready for a worker to pick up. It's sitting in a queue, waiting to be fetched.
+
+**Transitional states** — the job is moving between phases:
+- **`pending`** — the job has been claimed by the system but not yet assigned to a specific worker. This is an internal routing state that's particularly important for message broker backends like Kafka and NATS, where a message has been accepted but not yet delivered to a consumer.
+
+**Active state** — the job is running:
+- **`active`** — a worker is currently executing this job. The handler function is running.
+
+**Terminal states** — the job is done (one way or another):
+- **`completed`** — the job finished successfully. The handler returned without error.
+- **`retryable`** — the job failed but has retries remaining. It will be moved back to `available` after a backoff delay.
+- **`discarded`** — the job failed and has exhausted all retries. It's done, permanently.
+- **`cancelled`** — the job was explicitly cancelled by a user or the system before it could complete.
+
+### Why Not Fewer States?
+
+We considered several simplifications and rejected each one for specific reasons.
+
+**Why not collapse `retryable` into `available`?**
+
+Because observability matters. If a job failed and is being retried, that's fundamentally different from a new job that just arrived. Monitoring dashboards need to distinguish "this job failed 3 times and is about to be retried" from "this job was just enqueued." Without a separate `retryable` state, you lose the ability to answer questions like "how many jobs are currently in a retry cycle?" and "what's the retry rate for this job type?"
+
+**Why not collapse `scheduled` into `available`?**
+
+Because backends need to implement different polling strategies. Scheduled jobs need time-based checks — scanning for jobs whose `scheduled_at` has passed. Available jobs need queue-based fetching — grabbing the next item from a list or stream. Conflating them forces backend implementers to add conditional logic to every fetch operation, making implementations harder and less efficient.
+
+**Why `pending` at all?**
+
+Some backends, especially message brokers like Kafka and NATS, have an inherent intermediate state where a message has been accepted by the broker but not yet delivered to a consumer. Making this state explicit in the lifecycle prevents "lost job" bugs where a job is neither `available` nor `active` — it's in limbo, and without a name for that limbo, debugging becomes a nightmare. For simpler backends like Redis, the `pending` state may be transient (milliseconds), but it still exists logically.
+
+### Why Not More States?
+
+We also resisted pressure to add states that seemed useful but didn't earn their place.
+
+**Why not separate `running` and `finishing` states?**
+
+No job framework we analyzed actually needs this granularity in the core state machine. If a job needs to report progress while running ("50% complete"), that's a concern for an extension — and OJS has one (`ojs-progress`). Progress reporting is orthogonal to lifecycle state. A job is either active or it's not.
+
+**Why not a `paused` state?**
+
+Pausing is a queue-level operation, not a job-level one. When you pause a queue, you stop fetching new jobs from it, but you don't change the state of jobs already in flight. Adding `paused` to the job state machine would conflate queue management with job lifecycle, creating ambiguity: does "paused" mean the job was paused mid-execution, or that the queue was paused while the job was waiting? OJS keeps these concerns separate.
+
+**Why not a `timeout` or `stalled` state?**
+
+A timed-out job is really just a job that failed due to a specific cause. The appropriate transition is `active → retryable` (if retries remain) or `active → discarded` (if retries are exhausted), with the timeout recorded as the failure reason. Adding a separate state for every failure cause would lead to state explosion.
+
+### The Transition Rules
+
+Here is the complete set of valid state transitions:
+
+```
+scheduled   → available    (time-based: scheduled_at reached)
+available   → pending      (system claims for routing)
+available   → active       (direct fetch by worker)
+pending     → active       (worker receives assignment)
+active      → completed    (handler returns success)
+active      → retryable    (handler returns failure, retries remain)
+active      → discarded    (handler returns failure, no retries remain)
+retryable   → available    (retry delay elapsed)
+
+Any non-terminal → cancelled  (explicit cancellation)
+```
+
+Three key design decisions shape these transitions:
+
+**No backwards transitions** (except `retryable → available`). In the happy path, jobs move strictly forward through the lifecycle. This makes reasoning about job state straightforward and prevents cycles that could lead to infinite loops or inconsistent state.
+
+**Cancellation from any non-terminal state.** You can cancel a scheduled job, an available job, a pending job, or even an active job. This is essential for real-world operations — "stop that report generation, the customer deleted their account."
+
+**Terminal states are truly terminal.** Once a job reaches `completed`, `discarded`, or `cancelled`, it cannot change state. This property is critical for exactly-once processing guarantees and for building reliable audit logs.
+
+### How Backends Implement It
+
+One of the key validation criteria for the 8-state model was that it had to map cleanly to every major backend technology. Here's how different backends represent these states using their native primitives:
+
+- **Redis:** Sorted sets hold `scheduled` jobs (scored by timestamp), lists hold `available` jobs per queue, and hash fields track current state. Lua scripts ensure atomic transitions.
+- **PostgreSQL:** A `state` column with a CHECK constraint enforces valid values. `SELECT FOR UPDATE SKIP LOCKED` provides non-blocking dequeue from `available` to `active`.
+- **NATS JetStream:** Consumer acknowledgment semantics map naturally to `pending → active`. Redelivery handles the `retryable → available` transition.
+- **Kafka:** Consumer group offsets represent `pending`, offset commits represent the transition to terminal states. A companion state store (like Redis) tracks the full lifecycle.
+
+The fact that all four backend architectures can implement the same 8 states without awkward workarounds is strong evidence that we found the right abstraction level.
+
+### Conclusion
+
+The 8-state lifecycle is the result of analyzing 7+ existing frameworks and finding the minimal set of states that:
+
+- Enables correct monitoring and alerting (every meaningful job phase has a name)
+- Maps cleanly to every major backend technology (Redis, Postgres, message brokers, cloud queues)
+- Handles retries, scheduling, and cancellation explicitly (no hidden transitions)
+- Is simple enough to implement in any language (8 states, 9 transitions, clear rules)
+
+For the full decision record with all alternatives considered and trade-offs evaluated, see [ADR-002: Eight-State Job Lifecycle](https://github.com/openjobspec/spec/blob/main/adrs/002-eight-state-lifecycle.md). To see the lifecycle in action, try the [OJS Playground](https://playground.openjobspec.org) or [read the core spec](/spec/core).

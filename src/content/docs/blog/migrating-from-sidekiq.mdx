@@ -1,0 +1,128 @@
+---
+title: "Migrating from Sidekiq to Open Job Spec: A Practical Guide"
+description: "A step-by-step guide to incrementally migrating your Sidekiq jobs to OJS — without downtime and with cross-language superpowers."
+---
+
+### Why Migrate?
+
+This isn't a "Sidekiq is bad" post. Sidekiq is excellent — it's battle-tested, performant, and has a thriving ecosystem. But there are real scenarios where OJS offers something Sidekiq can't:
+
+- Your team added a Python ML pipeline and now you need Celery too
+- You want to swap Redis for Postgres (or NATS, or SQS) without rewriting workers
+- You want monitoring that works across all your job infrastructure
+- You want your job knowledge to transfer across languages and teams
+
+OJS isn't a Sidekiq replacement — it's a Sidekiq superset. You can migrate incrementally.
+
+### Concept Mapping
+
+| Sidekiq | OJS | Notes |
+|---------|-----|-------|
+| `SomeWorker.perform_async(args)` | `client.enqueue("some.worker", args)` | OJS uses dot-separated job types |
+| `class SomeWorker; include Sidekiq::Job` | `worker.register("some.worker", handler)` | Registration instead of class-based |
+| `sidekiq_options queue: 'critical'` | `client.enqueue(..., queue: "critical")` | Queue is per-enqueue, not per-class |
+| `sidekiq_retry_in { \|count\| ... }` | `retry: { max_attempts: 5, backoff: "exponential" }` | Declarative retry policy |
+| `Sidekiq::ScheduledSet` | `GET /ojs/v1/jobs?state=scheduled` | Query via HTTP API |
+| Dead set | Dead letter extension | `GET /ojs/v1/dead-letter/jobs` |
+| `Sidekiq::Middleware` | OJS middleware chain | Same `next()` pattern |
+
+### Step-by-Step Migration
+
+**Step 1: Run an OJS backend alongside Redis**
+
+```bash
+docker run -d -p 8080:8080 \
+  -e REDIS_URL=redis://localhost:6379 \
+  ghcr.io/openjobspec/ojs-backend-redis:latest
+```
+
+OJS Redis backend uses its own key namespace — it won't interfere with Sidekiq.
+
+**Step 2: Install the Ruby SDK**
+
+```ruby
+# Gemfile
+gem 'openjobspec'
+```
+
+**Step 3: Migrate one job at a time**
+
+```ruby
+# Before (Sidekiq)
+class EmailWorker
+  include Sidekiq::Job
+  sidekiq_options queue: 'email', retry: 5
+
+  def perform(to, subject, body)
+    Mailer.send(to: to, subject: subject, body: body)
+  end
+end
+
+EmailWorker.perform_async("user@example.com", "Welcome!", "Hello.")
+```
+
+```ruby
+# After (OJS)
+require "ojs"
+
+client = OJS::Client.new("http://localhost:8080")
+client.enqueue("email.send",
+  ["user@example.com", "Welcome!", "Hello."],
+  queue: "email",
+  max_attempts: 5
+)
+
+# Worker
+worker = OJS::Worker.new("http://localhost:8080", queues: ["email"])
+worker.register("email.send") do |ctx|
+  to, subject, body = ctx.job.args
+  Mailer.send(to: to, subject: subject, body: body)
+end
+worker.start
+```
+
+**Step 4: Run both systems in parallel**
+
+Keep Sidekiq running for existing jobs. New jobs go through OJS. Migrate workers one at a time.
+
+**Step 5: Add cross-language workers**
+
+Now that jobs are in OJS format, add a Python worker for ML jobs:
+
+```python
+worker = Worker("http://localhost:8080")
+
+@worker.register("ml.predict")
+async def predict(ctx):
+    model_id, input_data = ctx.job.args
+    result = await run_prediction(model_id, input_data)
+    return result
+
+worker.start()
+```
+
+Enqueue from Ruby, process in Python. That's the power of a standard.
+
+### What You Gain
+
+- **Backend portability:** Switch from Redis to Postgres with zero code changes
+- **Multi-language workers:** Process jobs from any language
+- **Standardized monitoring:** OJS Admin UI works with any backend
+- **Conformance-tested:** Your backend is validated against 100+ test cases
+
+### What You Lose (Honestly)
+
+- **Sidekiq Pro/Enterprise features:** Batches, rate limiting, encryption (OJS has equivalents but they're newer)
+- **Rails integration magic:** `ActiveJob` adapter not yet available (contribution opportunity!)
+- **Sidekiq Web UI:** Use OJS Admin UI instead (different but comparable)
+- **Maturity:** Sidekiq has 12+ years of production hardening. OJS is new.
+
+### Incremental Migration Checklist
+
+- [ ] Deploy OJS backend alongside existing infrastructure
+- [ ] Install OJS SDK in your application
+- [ ] Migrate one low-risk job type to OJS
+- [ ] Verify it works end-to-end with monitoring
+- [ ] Migrate additional job types one at a time
+- [ ] Add cross-language workers where beneficial
+- [ ] Once all jobs migrated, decommission Sidekiq

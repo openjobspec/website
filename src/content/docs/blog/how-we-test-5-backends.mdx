@@ -1,0 +1,150 @@
+---
+title: "Testing 25 Combinations: How We Validate OJS Conformance Across 5 Backends"
+description: "How we built a language-agnostic conformance test suite that validates 5 backends across 5 levels — and what we learned from the bugs it caught."
+---
+
+### The Problem: How Do You Know an Implementation Is Correct?
+
+When you define a standard, you need a way to verify implementations actually conform to it. This is well-understood for web standards (Acid tests, Web Platform Tests) and network protocols (RFC test suites), but nobody has done it for background jobs.
+
+OJS has 5 backend implementations — Redis, PostgreSQL, NATS, Kafka, and SQS. Each must correctly implement the 8-state lifecycle, all 7 logical operations (PUSH, FETCH, ACK, FAIL, BEAT, CANCEL, INFO), extensions like retries, scheduling, cron, workflows, and unique jobs, plus error codes and edge cases.
+
+Testing all of this consistently across 5 different storage engines, each with their own concurrency model and failure modes, is a significant engineering challenge. Here's how we solved it.
+
+### The Conformance Level Hierarchy
+
+Rather than requiring every implementation to support every feature, OJS defines 5 conformance levels. Each level is a superset of the previous:
+
+| Level | Name | What It Tests |
+|-------|------|---------------|
+| 0 | Core | Basic PUSH, FETCH, ACK. Job goes from available → active → completed. |
+| 1 | Lifecycle | Full 8-state lifecycle, cancellation, state queries |
+| 2 | Extensions | Retries, scheduling, cron, unique jobs |
+| 3 | Workflows | Chain, group, batch workflow primitives |
+| 4 | Advanced | Middleware, events, dead letter, queue management |
+
+Why levels? Because not every implementation needs to implement everything. A minimal OJS server can be Level 0 conformant and still be useful — it can enqueue, fetch, and complete jobs. Levels give implementers a clear upgrade path: get Level 0 passing first, then work your way up. This also means third-party implementations can advertise their conformance level, so users know exactly what to expect.
+
+### The Test Suite Architecture
+
+The core design decision was to define tests as **JSON files**, not as Go code, Python code, or any other language:
+
+```json
+{
+  "name": "push-and-fetch-basic",
+  "level": 0,
+  "steps": [
+    {
+      "action": "push",
+      "request": {
+        "type": "test.basic",
+        "args": ["hello"],
+        "queue": "default"
+      },
+      "expect": {
+        "status": 201,
+        "body": {
+          "state": "available",
+          "type": "test.basic"
+        }
+      }
+    },
+    {
+      "action": "fetch",
+      "request": {
+        "queues": ["default"]
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "state": "active",
+          "type": "test.basic",
+          "args": ["hello"]
+        }
+      }
+    }
+  ]
+}
+```
+
+We chose JSON for several important reasons:
+
+- **Language-agnostic:** Any programming language can parse and execute these tests. The test definitions aren't tied to any runtime.
+- **Auditable:** Non-programmers — including spec reviewers and project managers — can read and review test cases without understanding Go or Python.
+- **Extensible:** New assertion types can be added to the schema without code changes to existing tests.
+- **Versioned:** Tests are data, not code. They're easier to diff, review in pull requests, and track changes over time.
+
+### The Test Runner
+
+The current test runner is written in Go and operates via HTTP. For each test definition, it:
+
+1. Reads JSON test definitions from the `suites/` directory
+2. Filters by the requested conformance level
+3. Executes HTTP requests against the server under test
+4. Validates response status codes, headers, and body fields using the `expect` block
+5. Handles timing-dependent tests (such as scheduled jobs that become available after a delay, or retry backoff timers)
+6. Produces structured output with pass/fail/skip status per test
+
+Importantly, the runner is designed to be replaceable. The JSON test definitions are the source of truth, not the Go code that executes them. Anyone could write a conformance runner in Python, TypeScript, or Rust that reads the same JSON files and validates the same assertions. This is intentional — the test suite should be as language-agnostic as the spec itself.
+
+### The CI Matrix
+
+Every pull request and weekly schedule triggers a GitHub Actions workflow that runs all 25 combinations — 5 backends × 5 levels:
+
+```yaml
+strategy:
+  matrix:
+    backend: [redis, postgres, nats, kafka, sqs]
+    level: [0, 1, 2, 3, 4]
+```
+
+For each combination, the CI pipeline:
+
+1. **Starts the appropriate service container** — Redis, PostgreSQL, NATS, Kafka, or LocalStack (for SQS emulation)
+2. **Builds the backend server binary** from source
+3. **Starts the OJS server** configured for the specific backend
+4. **Waits for the health check** to confirm the server is ready
+5. **Runs the conformance suite** at the specified level
+6. **Uploads results** as GitHub Actions artifacts for review
+
+This gives us a complete compatibility matrix on every change. If a commit breaks PostgreSQL Level 2 conformance but everything else passes, we know exactly where to look.
+
+### Challenges and Solutions
+
+Building a conformance suite that works reliably across 5 fundamentally different storage engines surfaced several interesting challenges.
+
+**Challenge: Timing-dependent tests.** Some tests verify that a scheduled job becomes available after N seconds, or that a retry happens after a backoff delay. CI environments have variable latency — a test that passes locally might fail on a slow GitHub Actions runner.
+
+**Solution:** Tests use generous timeouts and polling with configurable intervals. Rather than asserting "the job is available at exactly T+5s," we assert "the job becomes available within T+5s to T+10s." This accommodates CI variability without making tests so loose they miss real bugs.
+
+**Challenge: Backend-specific setup.** Redis needs no schema setup — it creates keys on demand. PostgreSQL needs migrations to create tables and indexes. NATS needs stream and consumer configuration. SQS needs queue creation. Each backend has completely different initialization requirements.
+
+**Solution:** Each backend's server handles its own setup on startup. When the Redis backend starts, it creates its key namespace. When the PostgreSQL backend starts, it runs migrations. The conformance runner doesn't know or care about backend internals — it just hits the HTTP API. This clean separation means adding a new backend to the conformance matrix is trivial: implement the OJS HTTP API, handle your own setup, and point the runner at your server.
+
+**Challenge: State verification between steps.** After a test step pushes a job, how do you verify the backend is in the expected state before running the next step?
+
+**Solution:** The INFO operation is required at Level 1 and above. Tests can query job state between steps to verify that transitions happened correctly. For Level 0, tests rely on the response from PUSH and FETCH operations themselves, which include the job's current state.
+
+### Results and What We Learned
+
+The conformance matrix currently shows 100% pass across all 25 combinations. Getting there was the hard part — the process revealed bugs in every single backend:
+
+- **Redis:** A race condition in concurrent FETCH operations where Lua script ordering didn't match expected priority semantics under high contention.
+- **PostgreSQL:** `SKIP LOCKED` was not respecting priority ordering in certain edge cases where multiple rows had the same priority but different enqueue timestamps.
+- **NATS:** An acknowledgment timing issue with JetStream consumers where redelivery could happen before the OJS retry delay elapsed.
+- **Kafka:** Consumer offset commits weren't correctly synchronized with state transitions, leading to potential duplicate processing after consumer group rebalancing.
+- **SQS:** Visibility timeout values didn't align with OJS BEAT (heartbeat) semantics, causing jobs to become visible again while still being actively processed.
+
+Every one of these would have been a production bug if not caught by conformance testing. Several of them were subtle race conditions that only manifested under specific timing conditions — exactly the kind of bugs that unit tests miss but integration-level conformance tests catch.
+
+### How to Use It for Your Own Implementation
+
+If you want to build an OJS-compatible backend, the conformance suite is your best friend:
+
+1. Start with Level 0 — just implement PUSH, FETCH, and ACK
+2. Run `ojs-conformance -url http://your-server:8080 -level 0`
+3. Fix failures until Level 0 passes
+4. Move to Level 1 and repeat
+5. Continue until you reach the conformance level you need
+
+The test suite is open source and designed to be used by anyone building an OJS-compatible system. We actively encourage third-party implementations to run and publish their conformance results.

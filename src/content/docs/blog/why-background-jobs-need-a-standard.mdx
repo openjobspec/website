@@ -1,0 +1,183 @@
+---
+title: "Why Background Jobs Need a Standard (And What We Can Learn from HTTP)"
+description: "Background job processing is the last un-standardized primitive in web infrastructure. Here's why that needs to change."
+---
+
+### Every Standard Starts the Same Way
+
+HTTP started because every computer network had its own protocol. JSON started because every API had its own data format. CloudEvents started because every cloud provider had its own event schema.
+
+The pattern is always the same:
+1. A foundational concept emerges (web pages, data interchange, cloud events)
+2. Every implementation invents its own format
+3. The ecosystem fragments
+4. Someone says "this is ridiculous, let's standardize"
+5. Adoption is slow, then sudden
+6. The standard becomes invisible infrastructure
+
+Background job processing is at step 3. It's time for step 4.
+
+### The State of Background Jobs in 2026
+
+Let's look at what exists:
+
+| Framework | Language | Wire Format | States | Retry Model | Queue Model |
+|-----------|----------|-------------|--------|-------------|-------------|
+| Sidekiq | Ruby | Custom JSON | 6 | Per-job integer | Named strings |
+| Celery | Python | Pickle/JSON/YAML | 6 | Per-task config | Named strings |
+| BullMQ | Node.js | Custom JSON | ~8 | Per-job options | Named strings |
+| Faktory | Polyglot | Custom JSON | 5 | Fixed exponential | Named + weight |
+| Hangfire | C# | SQL-serialized | 6 | Global policy | Named strings |
+| Oban | Elixir | Ecto schema | 9 | Per-job config | Named strings |
+| River | Go | Go struct | ~6 | Per-job config | Named strings |
+
+Every single one defines its own:
+- Job data format
+- Lifecycle states and transitions
+- Retry semantics
+- Queue model
+- Error codes
+- Worker protocol
+
+This fragmentation has real costs.
+
+### The Cost of Fragmentation
+
+**1. Wasted Engineering Hours**
+
+Every job framework implements the same concepts from scratch. A retry system with exponential backoff. A state machine. Queue priority. Cron scheduling. Workflow orchestration. Each takes thousands of engineering hours to build, test, and maintain.
+
+Multiply by 20+ frameworks and you have an industry spending millions of hours reimplementing the same thing.
+
+**2. Vendor Lock-in**
+
+Once you choose Sidekiq, your entire job infrastructure — definitions, retry policies, monitoring, middleware — is Sidekiq-shaped. Migrating to Celery or BullMQ means rewriting everything. This isn't complexity you chose; it's complexity imposed by the lack of a standard.
+
+**3. Monitoring Fragmentation**
+
+Datadog has a Sidekiq integration. And a Celery integration. And a BullMQ integration. Each with different dashboards, different metrics, different alert patterns. A single OJS-compatible monitoring tool would work with any backend.
+
+**4. Polyglot Penalty**
+
+Modern teams use multiple languages. Your user-facing API is Go. Your ML pipeline is Python. Your real-time features are TypeScript. Each needs its own job framework. With a standard, they could all share a single job infrastructure.
+
+**5. Innovation Bottleneck**
+
+Without a standard, every innovation must be reimplemented in every framework. Want workflow orchestration? Build it for Sidekiq, Celery, BullMQ, Oban — separately. With a standard, build it once and it works everywhere.
+
+### What Standards Actually Do
+
+Standards don't replace implementations. HTTP didn't replace web servers — it enabled thousands of them. JSON didn't replace databases — it gave them a common interchange format. CloudEvents didn't replace event systems — it made them interoperable.
+
+A background job standard would:
+
+- **Define the envelope** — what metadata a job carries (type, queue, priority, retry policy, timestamps)
+- **Define the lifecycle** — what states a job can be in and how it transitions between them
+- **Define the protocol** — how clients submit jobs and workers fetch them
+- **Define extensions** — how to express retries, scheduling, workflows, unique jobs
+
+It would NOT:
+- Mandate a specific backend (use Redis, Postgres, Kafka, SQS — your choice)
+- Mandate a specific language (use Go, Python, TypeScript, Rust — your choice)
+- Mandate a specific deployment model (use containers, serverless, bare metal — your choice)
+
+### Learning from CloudEvents
+
+CloudEvents (CNCF graduated, 5,700+ stars) proved this model works. Before CloudEvents, every event source used a different format:
+
+```
+// AWS SNS
+{"Type": "Notification", "Message": "...", "TopicArn": "..."}
+
+// Azure Event Grid
+{"eventType": "...", "data": {}, "eventTime": "..."}
+
+// Google Cloud Pub/Sub
+{"data": "base64...", "attributes": {}}
+```
+
+After CloudEvents:
+```json
+{
+  "specversion": "1.0",
+  "type": "com.example.event",
+  "source": "/mycontext",
+  "id": "abc-123",
+  "data": {}
+}
+```
+
+One format. Every cloud provider adopted it. Every event router understands it. Innovation accelerated because tooling became portable.
+
+OJS does the same thing for jobs:
+
+```json
+{
+  "id": "019502a4-1234-7abc-8000-000000000001",
+  "type": "email.send",
+  "state": "available",
+  "queue": "default",
+  "args": ["user@example.com", "Welcome!", "Thanks for signing up."],
+  "attempt": 1,
+  "max_attempts": 3
+}
+```
+
+### The OJS Approach
+
+Open Job Spec follows a three-layer architecture (like CloudEvents):
+
+```
+Layer 3: Protocol Bindings    (HTTP, gRPC, AMQP)
+Layer 2: Wire Formats          (JSON, Protobuf)
+Layer 1: Core Specification    (Job envelope, 8-state lifecycle, operations)
+```
+
+**Layer 1** is protocol-agnostic. It defines what a job IS.
+
+**Layer 2** defines how jobs are serialized. JSON for simplicity, Protobuf for performance.
+
+**Layer 3** defines how jobs are transmitted. HTTP for universality, gRPC for efficiency, AMQP for messaging systems.
+
+This separation means you can use the OJS core with any transport and any serialization format. New protocols and formats can be added without changing the core.
+
+### The 8-State Lifecycle
+
+One of OJS's key design decisions is an explicit, well-defined lifecycle with 8 states:
+
+```
+scheduled → available → pending → active → completed
+                                    ↓
+                                retryable → available (retry)
+                                    ↓
+                                discarded
+
+Any non-terminal state → cancelled
+```
+
+Every job framework has states, but they're usually implicit, under-documented, and inconsistent. OJS makes the state machine explicit, with documented transitions and clear semantics for each state.
+
+This matters because monitoring, alerting, and debugging all depend on understanding what state a job is in and how it got there.
+
+### What Would Adoption Look Like?
+
+Imagine a world where:
+
+- You write a job handler in Python and deploy it alongside a Go handler, both processing from the same queue
+- You switch from Redis to Postgres as your backend without changing a single line of application code
+- Your monitoring dashboard works with any backend because they all report the same states and metrics
+- A new engineer joins your team and already understands your job system because they learned OJS at their previous company
+- You open-source a job middleware and it works with every OJS-compatible system
+
+This is what standards enable. Not lock-in — freedom.
+
+### Getting Involved
+
+OJS is Apache 2.0 licensed and developed in the open. The spec is at Release Candidate 1, with 5 conformant backend implementations and 6 official SDKs.
+
+- **Website:** [openjobspec.org](https://openjobspec.org)
+- **GitHub:** [github.com/openjobspec](https://github.com/openjobspec)
+- **Playground:** [playground.openjobspec.org](https://playground.openjobspec.org)
+- **Discussions:** [GitHub Discussions](https://github.com/openjobspec/spec/discussions)
+
+If you've ever been frustrated by background job fragmentation, we'd love your help building the standard that fixes it.
