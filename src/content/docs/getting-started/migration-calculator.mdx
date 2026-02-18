@@ -1,0 +1,182 @@
+---
+title: Migration Calculator
+description: Estimate migration effort and cost savings when switching to Open Job Spec from Sidekiq, BullMQ, Celery, or Temporal.
+---
+
+import MigrationCalculator from '../../../components/MigrationCalculator.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+Thinking about switching to OJS? This page helps you estimate migration effort, understand concept mappings, and plan your transition step by step.
+
+## Concept Mapping
+
+OJS follows familiar job queue patterns. If you've used any background job framework, most concepts map directly.
+
+### Universal Concept Map
+
+| Your Framework | OJS Equivalent | Notes |
+|:---|:---|:---|
+| Job / Task / Worker class | **Job handler function** | OJS uses plain functions, not classes |
+| `perform(args)` / `process(data)` | **`handler(ctx)`** | Access args via `ctx.job.args` |
+| Queue name | **Queue** (server-managed) | Named queues, `"default"` by default |
+| Enqueue / dispatch / send | **`client.enqueue(type, args)`** | Explicit job type string |
+| Batch insert | **`client.enqueueBatch(jobs)`** | Atomic batch insertion |
+| Retry policy | **Retry policy on job envelope** | Per-job, not global; server-managed |
+| Dead letter / dead set | **Dead letter queue** (`discarded` state) | Structured error info per attempt |
+| Cron / recurring job | **`client.registerCron(...)`** | Built-in, no separate process needed |
+| Workflow / pipeline | **`chain`, `group`, `batch`** | Three composable primitives |
+| Middleware / plugin | **Middleware chain** | `next()` pattern, per-worker |
+
+### Framework-Specific Mappings
+
+#### Sidekiq → OJS
+
+| Sidekiq | OJS | Key Difference |
+|:---|:---|:---|
+| `include Sidekiq::Job` | `worker.register("type", handler)` | Functions, not classes |
+| `perform_async(args...)` | `client.enqueue(type, args)` | Both use JSON arrays for args |
+| `sidekiq_options queue: "email"` | `enqueue(..., queue: "email")` | Queue is per-enqueue, not per-class |
+| `sidekiq_retry_in` block | Retry policy on the job envelope | Configurable per-job |
+| `perform_in(5.minutes)` | `enqueue(..., delay: "5m")` | Uses `scheduled_at` attribute |
+| Dead set / Retries tab | Dead letter queue + `discarded` state | Structured error history |
+| Sidekiq Pro Batches | `batch(jobs, callbacks)` | Free in OJS core |
+| Sidekiq Enterprise unique jobs | `unique_key` on job envelope | Free in OJS core |
+
+#### BullMQ → OJS
+
+| BullMQ | OJS | Key Difference |
+|:---|:---|:---|
+| `Queue` (client-side) | Queue (server-managed) | No client-side queue objects |
+| `queue.add(name, data)` | `client.enqueue(type, args)` | `data` (object) → `args` (array) |
+| `queue.addBulk(jobs)` | `client.enqueueBatch(jobs)` | Same pattern |
+| `Worker` | `OJSWorker` | Polls for jobs, runs handlers |
+| `job.data` | `ctx.job.args` | Object → array |
+| `job.attemptsMade` | `ctx.attempt` | OJS is 1-indexed |
+| `FlowProducer` | `client.workflow(chain(...))` | Chain, group, batch primitives |
+| `QueueScheduler` | Built into OJS server | No separate scheduler process |
+
+#### Celery → OJS
+
+| Celery | OJS | Key Difference |
+|:---|:---|:---|
+| `@app.task` decorator | `@worker.register()` | Decorated async functions |
+| `task.delay(args)` | `client.enqueue(type, args)` | Explicit type strings |
+| `CELERY_BROKER_URL` + `CELERY_RESULT_BACKEND` | `OJS_URL` | One URL, not two |
+| `celery worker` CLI | `await worker.start()` | Workers embedded in your app |
+| `task.retry()` | Server-side retry policy | No client-side retry logic |
+| `chord(group, callback)` | `batch(jobs, callbacks)` | Same fan-out/fan-in pattern |
+| `chain(task1.s(), task2.s())` | `chain(step1, step2)` | Sequential pipelines |
+| Pickle serialization (default) | JSON (always) | No security risk from deserialization |
+
+## Key Differences to Be Aware Of
+
+Regardless of which framework you're migrating from, keep these OJS-specific patterns in mind:
+
+### 1. Args are arrays, not objects
+
+OJS uses `args` (an ordered array) instead of `payload` or `data` (an object). This matches the function call mental model:
+
+```json
+// OJS job envelope
+{
+  "type": "email.send",
+  "args": ["user@example.com", "welcome", { "name": "Alice" }]
+}
+```
+
+### 2. The server manages state, not the client
+
+OJS has a dedicated server process. Queues, retries, scheduling, and lifecycle transitions are all server-side. Your SDK is a thin HTTP/gRPC client.
+
+### 3. Eight lifecycle states
+
+OJS has a formally specified 8-state lifecycle: `scheduled → available → pending → active → completed | retryable | cancelled | discarded`. This is more granular than most frameworks, giving you better observability.
+
+### 4. Job type is a string, not a class reference
+
+Jobs are identified by a type string (e.g., `"email.send"`) rather than a class name or module path. This enables cross-language processing.
+
+## Step-by-Step Migration Checklist
+
+Use this checklist to plan and execute your migration. Typical timeline: **1–8 weeks** depending on scale.
+
+### Phase 1: Assessment (Week 1)
+
+- [ ] **Inventory your jobs** — List all job types, their frequency, and their current retry/scheduling configuration.
+- [ ] **Identify dependencies** — Map which jobs trigger other jobs (workflows, chains, callbacks).
+- [ ] **Choose your OJS backend** — Redis (low-latency), PostgreSQL (transactional), NATS (cloud-native), Kafka (streaming), or SQS (AWS-native).
+- [ ] **Review the [OJS core concepts](/getting-started/concepts/)** — Understand the envelope format and 8-state lifecycle.
+
+### Phase 2: Setup (Week 2)
+
+- [ ] **Deploy an OJS server** — Use the [Quickstart guide](/getting-started/quickstart/) or [Deployment guide](/guides/deployment/).
+- [ ] **Install the OJS SDK** in your application's language.
+- [ ] **Set up monitoring** — OJS exposes Prometheus metrics and supports OpenTelemetry. Connect to your existing observability stack.
+- [ ] **Configure retry policies** — Map your existing retry settings to OJS per-job retry policies.
+
+### Phase 3: Migrate Jobs (Weeks 3–6)
+
+- [ ] **Start with low-risk jobs** — Pick 2–3 non-critical job types for the first migration.
+- [ ] **Rewrite handlers** — Convert job classes/decorators to OJS handler functions (see concept mappings above).
+- [ ] **Update producers** — Replace `perform_async()` / `queue.add()` / `task.delay()` with `client.enqueue()`.
+- [ ] **Run in parallel** — Run both old and new systems simultaneously during migration. Use feature flags to route traffic.
+- [ ] **Validate** — Compare job completion rates, error rates, and latency between old and new systems.
+- [ ] **Migrate remaining jobs** — Once confident, migrate the rest of your job types.
+
+### Phase 4: Workflows & Advanced Features (Weeks 5–7)
+
+- [ ] **Migrate workflows** — Convert Sidekiq Pro batches, BullMQ flows, or Celery canvas to OJS `chain`/`group`/`batch`.
+- [ ] **Migrate cron jobs** — Replace `sidekiq-cron`, `celery-beat`, or `BullMQ` repeatable jobs with OJS cron registration.
+- [ ] **Set up unique jobs** — Replace uniqueness plugins with OJS's built-in `unique_key` support.
+- [ ] **Configure rate limiting** — If applicable, set up OJS per-queue rate limiting.
+
+### Phase 5: Cutover & Cleanup (Week 8)
+
+- [ ] **Drain the old queue** — Let remaining jobs complete on the old system.
+- [ ] **Remove old framework dependencies** — Uninstall Sidekiq/BullMQ/Celery and related gems/packages.
+- [ ] **Update deployment config** — Remove old queue workers/processes from your deployment.
+- [ ] **Document the new architecture** — Update runbooks, on-call guides, and dashboards.
+
+## Cost Savings Estimate
+
+Use the interactive calculator below to estimate your potential cost savings.
+
+<MigrationCalculator />
+
+<Aside type="caution">
+  These estimates are approximate and based on publicly available pricing as of 2025. Actual costs vary based on your specific configuration, region, and usage patterns. Infrastructure costs assume a single availability zone — production deployments with HA will cost more.
+</Aside>
+
+### Current system costs
+
+| System | Cost Model |
+|:---|:---|
+| **Temporal Cloud** | Base fee (~$200/mo) + ~$0.00025 per action |
+| **Sidekiq Pro** | $1,950/year license + Redis hosting |
+| **Sidekiq Enterprise** | $3,950/year license + Redis hosting |
+| **BullMQ Pro** | ~$50/mo license + Redis hosting |
+| **Custom** | Estimated maintenance overhead per engineer |
+
+### OJS self-hosted costs
+
+OJS runs on infrastructure you likely already have. Typical costs:
+
+| Provider | Compute | Database | Total |
+|:---|:---|:---|:---|
+| **AWS** | ECS Fargate (2 vCPU, 4GB): ~$70/mo | RDS PostgreSQL (db.t3.medium): ~$50/mo | ~$120/mo |
+| **GCP** | Cloud Run: ~$60/mo | Cloud SQL: ~$45/mo | ~$105/mo |
+| **Azure** | Container Instances: ~$65/mo | Azure Database: ~$55/mo | ~$120/mo |
+
+### What's not included
+
+- **Migration engineering time** — Typically 1–8 weeks depending on scale (see checklist above)
+- **Training time** — OJS follows familiar patterns; most teams are productive within days
+- **Monitoring costs** — OJS exports Prometheus metrics natively; use your existing stack
+
+## Detailed Migration Guides
+
+- [**Migrate from Sidekiq →**](/guides/migrate-from-sidekiq/)
+- [**Migrate from BullMQ →**](/guides/migrate-from-bullmq/)
+- [**Migrate from Celery →**](/guides/migrate-from-celery/)
+- [**OJS vs Competitors →**](/getting-started/comparisons/) — Full comparison to help justify the migration
+- [**Quickstart Guide →**](/getting-started/quickstart/)

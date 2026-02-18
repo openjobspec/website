@@ -1,0 +1,139 @@
+---
+title: Feature Comparison
+description: Detailed feature-by-feature comparison of Open Job Spec vs Sidekiq, BullMQ, Celery, Temporal, and Faktory.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A comprehensive feature comparison between OJS and popular job processing frameworks. Updated for 2025.
+
+<Aside type="note">
+  ✅ = Built-in &nbsp; ⚡ = Paid/Pro feature &nbsp; 🔌 = Plugin/extension &nbsp; ❌ = Not available &nbsp; ⏳ = Planned
+</Aside>
+
+## Core Features
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Open specification** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Conformance test suite** | ✅ 194 tests | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Job enqueue** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Job dequeue (pull)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Job cancel** | ✅ | ❌ | ✅ | ✅ (revoke) | ✅ | ❌ |
+| **Batch enqueue** | ✅ | ✅ | ✅ | ✅ (group) | ✅ | ✅ |
+| **Job priority** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Delayed/scheduled jobs** | ✅ | ✅ | ✅ | ✅ (eta/countdown) | ✅ | ✅ |
+| **Job progress tracking** | ✅ | ❌ | ✅ | ✅ (custom state) | ✅ (query) | ❌ |
+| **Job results** | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+
+## Reliability & Retry
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Automatic retry** | ✅ | ✅ | ✅ | ✅ | ✅ (built-in) | ✅ |
+| **Configurable backoff** | ✅ exp/linear/custom | ✅ exponential | ✅ exp/custom | ✅ exp/custom | ✅ | ✅ exponential |
+| **Per-job retry config** | ✅ | ❌ (global) | ✅ | ✅ | ✅ | ❌ (global) |
+| **Dead letter queue** | ✅ | ✅ (Dead set) | ✅ | ❌ | ❌ | ✅ (Dead set) |
+| **Formal lifecycle states** | ✅ 8 states | 3 states | ~5 states | ~5 states | N/A | 5 states |
+| **At-least-once delivery** | ✅ | ✅ | ✅ | ✅ | ✅ (exactly-once) | ✅ |
+
+## Scheduling & Orchestration
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Cron/recurring jobs** | ✅ | ⚡ Enterprise | ✅ | ✅ (celery-beat) | ✅ | ✅ |
+| **Unique jobs** | ✅ | ⚡ Enterprise | ✅ | 🔌 celery-once | ✅ (idempotency) | ✅ |
+| **Workflows: chain** | ✅ | ⚡ Pro (batches) | ✅ (flows) | ✅ | ✅ (full DSL) | ❌ |
+| **Workflows: fan-out** | ✅ (group) | ⚡ Pro | ✅ (flows) | ✅ (group) | ✅ | ❌ |
+| **Workflows: fan-in** | ✅ (batch) | ⚡ Pro | ✅ (flows) | ✅ (chord) | ✅ | ❌ |
+| **Rate limiting** | ✅ | ⚡ Enterprise | ✅ | 🔌 plugin | ✅ | ❌ |
+| **Middleware/interceptors** | ✅ | ✅ | ❌ | ✅ | ✅ (interceptors) | ✅ |
+
+## Language & Backend Support
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Go SDK** | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| **JavaScript/TypeScript** | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ |
+| **Python** | ✅ | ❌ | 🔌 (bullmq) | ✅ | ✅ | ✅ |
+| **Java** | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ (community) |
+| **Rust** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Ruby** | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **Redis backend** | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **PostgreSQL backend** | ✅ | ❌ | ❌ | ❌ | ✅ (visibility) | ❌ |
+| **NATS backend** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Kafka backend** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **SQS backend** | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+
+## Operations & Observability
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Admin UI** | ✅ | ✅ (Web UI) | ✅ (Board) | ✅ (Flower) | ✅ (Web UI) | ✅ |
+| **Prometheus metrics** | ✅ | 🔌 exporter | 🔌 exporter | 🔌 exporter | ✅ | ❌ |
+| **OpenTelemetry** | ✅ | ❌ | ❌ | 🔌 plugin | ✅ | ❌ |
+| **Structured logging** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Webhooks/events** | ✅ | ❌ | ✅ (events) | ✅ (signals) | ✅ (signals) | ❌ |
+| **Health endpoint** | ✅ | ❌ | ❌ | 🔌 (inspect) | ✅ | ❌ |
+| **Graceful shutdown** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+## Protocol & Wire Format
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **HTTP API** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **gRPC API** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **AMQP binding** | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **JSON wire format** | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| **Protobuf wire format** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **Custom TCP protocol** | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+
+## Deployment & Infrastructure
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Docker images** | ✅ | ❌ (library) | ❌ (library) | ❌ (library) | ✅ | ✅ |
+| **Helm charts** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **Terraform provider** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Kubernetes operator** | ✅ | ❌ | ❌ | ❌ | ✅ (community) | ❌ |
+| **Managed cloud** | ⏳ Planned | ❌ | ❌ | ❌ | ✅ Temporal Cloud | ❌ |
+
+## Licensing & Cost
+
+| Aspect | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---|:---|:---|:---|:---|:---|
+| **License** | Apache 2.0 | LGPL / Commercial | MIT | BSD-3 | MIT | GPL / Commercial |
+| **Core features** | Free | Free | Free | Free | Free | Free |
+| **Workflows** | Free | $1,950/yr (Pro) | Free | Free | Free | N/A |
+| **Cron + Unique** | Free | $3,950/yr (Ent) | Free | Free/Plugin | Free | Free |
+| **Rate limiting** | Free | $3,950/yr (Ent) | Free | Plugin | Free | N/A |
+| **Managed cloud** | ⏳ TBD | N/A | N/A | N/A | ~$200+/mo | N/A |
+
+<Aside type="tip">
+OJS includes workflows, cron jobs, unique jobs, rate limiting, and middleware in the open-source core — features that competitors charge thousands of dollars per year for.
+</Aside>
+
+## Summary
+
+**Choose OJS when you need:**
+- A language-agnostic standard that works across your polyglot architecture
+- Backend flexibility (Redis → PostgreSQL → NATS without code changes)
+- Free access to features competitors charge for (workflows, unique jobs, cron)
+- Formal specification and conformance testing for compliance requirements
+- HTTP/gRPC APIs that any tool can integrate with
+
+**Consider alternatives when:**
+- You're all-in on one language and want maximum ecosystem depth (Sidekiq for Ruby, BullMQ for Node)
+- You need full durable workflow orchestration with replay (Temporal)
+- You need immediate production maturity with years of battle-testing (Sidekiq, Celery)
+
+---
+
+<div class="cta-section">
+  <h2>See it in action</h2>
+  <p>The best way to evaluate OJS is to try it. Start processing jobs in under 2 minutes.</p>
+  <div class="cta-buttons">
+    <a href="/getting-started/quickstart/" class="cta-primary">Quickstart Guide</a>
+    <a href="https://playground.openjobspec.org" class="cta-secondary">Try the Playground</a>
+  </div>
+</div>

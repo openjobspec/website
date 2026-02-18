@@ -1,0 +1,254 @@
+---
+title: "OJS vs Competitors"
+description: "A comprehensive, fair comparison of Open Job Spec against Temporal, Inngest, BullMQ, Celery, Sidekiq, and AWS Step Functions for background job processing."
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Open Job Spec (OJS) is a **vendor-neutral, open standard** for background job processing — think CloudEvents, but for jobs. This page provides an honest, side-by-side comparison with leading alternatives so you can choose the right tool for your architecture.
+
+## Why OJS?
+
+Most job frameworks are **products** — tightly coupled libraries where the producer, consumer, and broker all speak the same proprietary protocol. OJS is a **standard**: a formally specified envelope format, protocol bindings, and lifecycle model that any language can implement.
+
+**Three things set OJS apart:**
+
+1. **Open standard** — RFC-driven specification with 194 conformance tests. No single vendor controls it.
+2. **Vendor-neutral** — 5 backend choices (Redis, PostgreSQL, NATS, Kafka, SQS) with identical behavior. Swap backends by changing a connection string.
+3. **True polyglot** — 6 official SDKs (Go, TypeScript, Python, Java, Rust, Ruby) with identical feature sets and a formal conformance suite guaranteeing interoperability.
+
+<Aside type="tip">
+  OJS doesn't replace your favorite language's job library — it gives all of them a common language to speak.
+</Aside>
+
+## Comparison Matrix
+
+The table below compares OJS against six popular alternatives across key dimensions.
+
+<Aside type="note">
+  ✅ = Built-in &nbsp; ⚡ = Paid/Pro feature &nbsp; 🔌 = Plugin/extension &nbsp; ❌ = Not available &nbsp; ⏳ = Planned &nbsp; ➖ = Not applicable
+</Aside>
+
+### Standards & Governance
+
+| Feature | OJS | Temporal | Inngest | BullMQ | Celery | Sidekiq | AWS Step Functions |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Open specification** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Conformance test suite** | ✅ 194 tests | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **License** | Apache 2.0 | MIT | Elastic 2.0 | MIT | BSD-3 | LGPL / Commercial | Proprietary |
+| **Self-hostable** | ✅ | ✅ | ✅ | ✅ (library) | ✅ (library) | ✅ (library) | ❌ |
+| **Open governance (RFC process)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+### Multi-Language SDKs
+
+| Language | OJS | Temporal | Inngest | BullMQ | Celery | Sidekiq | AWS Step Functions |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Go** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ (via AWS SDK) |
+| **TypeScript/JavaScript** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ (via AWS SDK) |
+| **Python** | ✅ | ✅ | ✅ | 🔌 | ✅ | ❌ | ✅ (via AWS SDK) |
+| **Java** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (via AWS SDK) |
+| **Rust** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Ruby** | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ (via AWS SDK) |
+| **Official SDK count** | **6** | 4 | 3 | 1 | 1 | 1 | N/A (AWS SDKs) |
+
+### Backend & Infrastructure
+
+| Feature | OJS | Temporal | Inngest | BullMQ | Celery | Sidekiq | AWS Step Functions |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Backend-agnostic** | ✅ (5 backends) | ❌ | ❌ | ❌ | Partial (3) | ❌ | ❌ |
+| **Redis** | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **PostgreSQL** | ✅ | ✅ (visibility) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **NATS** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Kafka** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **SQS** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
+| **Deployment model** | Self-hosted binary | Self-hosted / Cloud | Self-hosted / Cloud | Library (in-process) | Library (in-process) | Library (in-process) | Fully managed |
+
+### Job Lifecycle & Processing
+
+| Feature | OJS | Temporal | Inngest | BullMQ | Celery | Sidekiq | AWS Step Functions |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Formal lifecycle states** | ✅ 8 states | N/A | ❌ | ~5 states | ~5 states | 3 states | 8+ states |
+| **Job enqueue** | ✅ | ✅ | ✅ (send event) | ✅ | ✅ | ✅ | ✅ (start execution) |
+| **Batch enqueue** | ✅ | ❌ (loop) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Job cancellation** | ✅ | ✅ | ✅ | ✅ | ✅ (revoke) | ❌ | ✅ |
+| **Job priority** | ✅ | ❌ (queue-based) | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **Delayed/scheduled jobs** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (Wait state) |
+| **Unique/deduplicated jobs** | ✅ | ✅ (workflow ID) | ✅ (idempotency) | ✅ | 🔌 | ⚡ Enterprise | ❌ |
+| **Dead letter queue** | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
+
+### Workflows & Orchestration
+
+| Feature | OJS | Temporal | Inngest | BullMQ | Celery | Sidekiq | AWS Step Functions |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Sequential (chain)** | ✅ | ✅ | ✅ (step.run) | ✅ (flows) | ✅ | ⚡ Pro | ✅ |
+| **Parallel (fan-out/fan-in)** | ✅ (group) | ✅ | ✅ | ✅ (flows) | ✅ (group/chord) | ⚡ Pro | ✅ (Parallel state) |
+| **Batch with callbacks** | ✅ | ✅ (child workflows) | ✅ | ✅ | ✅ (chord) | ⚡ Pro | ✅ (Map state) |
+| **Saga / compensation** | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (Catch/Retry) |
+| **Durable execution / replay** | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **Long-running (days/weeks)** | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
+
+### Retry & Error Handling
+
+| Feature | OJS | Temporal | Inngest | BullMQ | Celery | Sidekiq | AWS Step Functions |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Automatic retry** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Per-job retry config** | ✅ | ✅ (per-activity) | ✅ | ✅ | ✅ | ❌ (global) | ✅ |
+| **Backoff strategies** | ✅ exp/linear/custom | ✅ | ✅ | ✅ | ✅ | ✅ exponential | ✅ |
+| **Cron/recurring jobs** | ✅ | ✅ | ✅ | ✅ | ✅ (celery-beat) | ⚡ Enterprise | ✅ (EventBridge) |
+| **Rate limiting** | ✅ | ✅ | ✅ | ✅ | 🔌 | ⚡ Enterprise | ❌ |
+
+### Protocols & Observability
+
+| Feature | OJS | Temporal | Inngest | BullMQ | Celery | Sidekiq | AWS Step Functions |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **REST/HTTP API** | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **gRPC API** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Real-time events** | ✅ | ✅ (signals) | ✅ | ✅ (events) | ✅ (signals) | ❌ | ✅ (CloudWatch) |
+| **Middleware/interceptors** | ✅ | ✅ (interceptors) | ✅ (middleware) | ❌ | ✅ | ✅ | ❌ |
+| **Admin UI** | ✅ | ✅ | ✅ | ✅ (Board) | ✅ (Flower) | ✅ (Web UI) | ✅ (Console) |
+| **Prometheus metrics** | ✅ | ✅ | ❌ | 🔌 | 🔌 | 🔌 | ➖ (CloudWatch) |
+| **OpenTelemetry** | ✅ | ✅ | ✅ | ❌ | 🔌 | ❌ | ✅ (X-Ray) |
+
+## When to Choose What
+
+Choosing the right tool depends on your team's needs, stack, and architecture. Here's an honest guide.
+
+### Choose OJS when…
+
+- **Your team is polyglot.** A Go service enqueues a job, a Python ML worker processes it, and a TypeScript dashboard tracks it — all speaking one protocol.
+- **You want to avoid vendor lock-in.** OJS has 5 backends. Switch from Redis to PostgreSQL by changing a connection string.
+- **You need portable job definitions.** The OJS envelope is a universal format — like CloudEvents for jobs.
+- **You value standards.** Formal RFC-driven specification, 194 conformance tests, and open governance.
+- **You want paid features for free.** Workflows, unique jobs, cron, and rate limiting are all in the open-source core.
+
+<Tabs>
+  <TabItem label="Go">
+```go
+// Enqueue a job — same pattern in every OJS SDK
+client := ojs.NewClient(ojs.ClientConfig{URL: "http://localhost:8080"})
+job, _ := client.Enqueue(ctx, "email.send", "user@example.com", "welcome")
+```
+  </TabItem>
+  <TabItem label="TypeScript">
+```typescript
+const client = new OJSClient({ url: 'http://localhost:8080' });
+const job = await client.enqueue('email.send', ['user@example.com', 'welcome']);
+```
+  </TabItem>
+  <TabItem label="Python">
+```python
+client = OJSClient(url="http://localhost:8080")
+job = await client.enqueue("email.send", ["user@example.com", "welcome"])
+```
+  </TabItem>
+</Tabs>
+
+### Choose Temporal when…
+
+- **You need complex, long-running workflows** that span hours or days with human-in-the-loop steps.
+- **Saga patterns are critical** — reliable compensation logic (e.g., "if payment succeeds but shipping fails, refund the payment").
+- **You need durable execution** with deterministic replay and full execution history for debugging.
+- **Strong consistency guarantees** matter more than operational simplicity.
+
+Temporal excels at orchestrating complex business processes like order fulfillment, insurance claims, and multi-step approval workflows. It's a purpose-built platform for this — not something you should try to replicate with simpler tools.
+
+### Choose Inngest when…
+
+- **You're serverless-first** and want functions that respond to events without managing infrastructure.
+- **Event-driven architecture** is your primary pattern — you think in events, not job queues.
+- **Simple setup** matters — Inngest's DX is excellent for getting started quickly with TypeScript/Go/Python.
+- **Step functions with replay** are useful but you don't need the full weight of Temporal.
+
+Inngest provides a great middle ground between simple job queues and full workflow orchestration, especially for serverless and event-driven architectures.
+
+### Choose BullMQ, Celery, or Sidekiq when…
+
+- **You're all-in on one language** (Node.js, Python, or Ruby respectively) with no plans to add others.
+- **Ecosystem depth** matters more than cross-language interop — you want tight integration with your language's frameworks.
+- **You already have it running** — these are battle-tested in production at scale. If it's working, don't fix it.
+
+These frameworks pioneered background job processing in their ecosystems. They're excellent choices for single-language teams.
+
+### Choose AWS Step Functions when…
+
+- **You're all-in on AWS** and want a fully managed, serverless orchestration service.
+- **Visual workflow design** through the AWS Console matters to your team.
+- **You need tight integration** with 200+ AWS services (Lambda, ECS, SNS, DynamoDB, etc.).
+- **You don't want to operate infrastructure** — Step Functions is fully managed with pay-per-transition pricing.
+
+## Architecture Comparison
+
+OJS uses a **layered architecture** inspired by CloudEvents, separating concerns that monolithic solutions bundle together:
+
+```
+┌───────────────────────────────────────────────────────────┐
+│  Layer 3: Protocol Bindings (HTTP, gRPC, AMQP)           │  ← How jobs travel
+├───────────────────────────────────────────────────────────┤
+│  Layer 2: Wire Formats (JSON, Protobuf)                  │  ← How jobs are serialized
+├───────────────────────────────────────────────────────────┤
+│  Layer 1: Core (envelope, 8-state lifecycle, operations)  │  ← What a job IS
+└───────────────────────────────────────────────────────────┘
+```
+
+**Why this matters:**
+
+| Approach | OJS (Layered Standard) | Monolithic Frameworks |
+|:---|:---|:---|
+| **Change transport** | Swap HTTP → gRPC, same job format | Rewrite integration |
+| **Change backend** | Swap Redis → PostgreSQL, same SDK | Often impossible |
+| **Add a language** | Implement the spec, get conformance-tested | Fork or rewrite the library |
+| **Customize serialization** | Choose JSON or Protobuf per use case | Use whatever the library provides |
+
+### Infrastructure comparison
+
+```
+OJS:                                 Temporal:
+┌──────────────┐                     ┌──────────────────┐
+│  Your App    │                     │  Your App        │
+│  + OJS SDK   │                     │  + Temporal SDK  │
+└──────┬───────┘                     └──────┬───────────┘
+       │ HTTP/gRPC                          │ gRPC
+┌──────▼───────┐                     ┌──────▼───────────┐
+│  OJS Server  │                     │ Temporal Server   │
+│ (single      │                     │ (4 services:      │
+│  binary)     │                     │  Frontend,        │
+└──────┬───────┘                     │  Matching,        │
+       │                             │  History, Worker) │
+┌──────▼───────┐                     └──────┬───────────┘
+│ Your choice: │                            │
+│ Redis / PG / │                     ┌──────▼───────────┐
+│ NATS / Kafka │                     │ Cassandra / MySQL │
+│ / SQS        │                     │ + Elasticsearch   │
+└──────────────┘                     └──────────────────┘
+```
+
+**OJS** deploys as a single server binary + your choice of datastore.
+**Temporal** requires 4 internal services + 2–3 datastores.
+
+## Migration Guides
+
+Already using another framework? We have step-by-step migration guides:
+
+| From | Guide | Key difference |
+|:---|:---|:---|
+| **Sidekiq** | [Migrate from Sidekiq →](/guides/migrate-from-sidekiq/) | Class-based workers → function handlers; per-enqueue queue selection |
+| **BullMQ** | [Migrate from BullMQ →](/guides/migrate-from-bullmq/) | `data` (object) → `args` (array); client-side queues → server-managed |
+| **Celery** | [Migrate from Celery →](/guides/migrate-from-celery/) | Separate broker + backend → single OJS server URL |
+
+For a detailed breakdown of concept mappings and a migration checklist, see the [Migration Calculator](/getting-started/migration-calculator/).
+
+## Performance
+
+OJS publishes reproducible benchmarks for all backends, generated automatically in CI. For detailed results, methodology, and historical trends, see the [Benchmarks page](/reference/benchmarks/).
+
+Key highlights:
+- **Redis backend**: Optimized with Lua scripts for atomic multi-key operations
+- **PostgreSQL backend**: Uses `SELECT ... FOR UPDATE SKIP LOCKED` for non-blocking dequeue
+- **All backends**: Pass identical conformance tests, ensuring consistent behavior regardless of choice
+
+## Further Reading
+
+- [**Feature Comparison →**](/getting-started/feature-comparison/) — Granular feature-by-feature table with detailed breakdowns
+- [**Why Choose OJS? →**](/getting-started/why-ojs/) — Value proposition and pain points OJS solves
+- [**Core Concepts →**](/getting-started/concepts/) — The job envelope, 8-state lifecycle, and operations
+- [**Quickstart →**](/getting-started/quickstart/) — Enqueue your first job in under 2 minutes

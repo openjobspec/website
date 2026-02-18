@@ -1,0 +1,140 @@
+---
+title: Why Open Job Spec?
+description: Discover why OJS is the right choice for your background job infrastructure — whether you're migrating from Sidekiq, BullMQ, Celery, or Temporal.
+---
+
+import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## The problem: vendor lock-in everywhere
+
+Every background job framework today locks you in. **Sidekiq** locks you into Ruby. **BullMQ** locks you into Node.js. **Celery** locks you into Python. Even if you manage to use multiple languages, you're locked into **Redis** as your only backend.
+
+**Open Job Spec changes this.** It's a vendor-neutral standard — like HTTP for web requests or CloudEvents for event-driven systems — but for background jobs.
+
+## Who is OJS for?
+
+<CardGrid>
+  <Card title="Polyglot teams" icon="rocket">
+    Your Go service enqueues a job, your Python ML pipeline processes it, and your TypeScript dashboard tracks it. OJS makes this seamless with 6 official SDKs sharing one protocol.
+  </Card>
+  <Card title="Platform engineers" icon="setting">
+    Build a job processing platform once, expose it to every team in your org. OJS's formal specification means no ambiguity about behavior — 194 conformance tests verify it.
+  </Card>
+  <Card title="Migration-ready orgs" icon="forward-slash">
+    Stuck on Redis but need Postgres durability? Running Sidekiq but expanding to Go? OJS lets you migrate incrementally without rewriting your job logic.
+  </Card>
+  <Card title="Cost-conscious teams" icon="approve-check">
+    Temporal Cloud bills per action. OJS is 100% open source, self-hostable, with 5 backend choices. Run on the infrastructure you already have.
+  </Card>
+</CardGrid>
+
+## The pain points OJS solves
+
+### "We're locked into Sidekiq because our jobs are in Redis"
+
+With OJS, your jobs aren't locked to any backend. Write your job logic once with any SDK, then deploy against Redis today and PostgreSQL tomorrow — just change a connection string. All 5 backends pass the same 194 conformance tests, guaranteeing identical behavior.
+
+### "Temporal is amazing but expensive at scale"
+
+Temporal Cloud charges per action, which adds up fast. OJS gives you workflow primitives (chain, group, batch) that cover 90% of use cases — without the complexity of deterministic replay. Self-host on your existing infrastructure for the cost of the compute.
+
+### "BullMQ locked us into Node.js, but our new services are in Go"
+
+OJS is truly language-agnostic. A JavaScript producer and a Go consumer speak the same protocol. The formal specification ensures every SDK behaves identically — no "works in Node but breaks in Python" surprises.
+
+### "We need a job standard for compliance"
+
+OJS is the only background job system with a formal specification using RFC 2119 keywords (MUST, SHOULD, MAY). Every requirement has a rationale. Every behavior is testable via the conformance suite. This matters for audit trails and regulatory compliance.
+
+## What makes OJS different
+
+| | Traditional Job Queues | OJS |
+|:---|:---|:---|
+| **Protocol** | Proprietary, tied to implementation | Open standard (HTTP, gRPC, AMQP) |
+| **Format** | Custom per framework | Vendor-neutral JSON envelope |
+| **Lifecycle** | 3-5 states, loosely defined | 8 states, formally specified |
+| **Testing** | Trust the library | 194 conformance tests, 5 levels |
+| **Backend** | Usually 1 (Redis) | 5 choices, same SDK code |
+| **Languages** | Usually 1 | 6 official SDKs, identical features |
+| **Governance** | Single company | Open RFC process, Apache 2.0 |
+
+## OJS vs the alternatives
+
+### vs Sidekiq → Choose OJS when you need more than Ruby
+
+Sidekiq is excellent for Ruby-only teams. But the moment you add a Go or Python service, you need a new job queue. OJS gives you one queue for all languages, with features Sidekiq charges for (workflows, unique jobs, cron) included free.
+
+### vs BullMQ → Choose OJS when you need more than Redis
+
+BullMQ has great DX for Node.js developers. But it's Redis-only and Node-only. OJS gives you the same developer experience across 6 languages and 5 backends — including PostgreSQL for teams that want transactional guarantees.
+
+### vs Celery → Choose OJS when you need a modern standard
+
+Celery pioneered distributed task queues in Python, but its message format and configuration are showing their age. OJS offers a clean, formally specified protocol with type-safe SDKs, structured errors, and first-class observability (OpenTelemetry).
+
+### vs Temporal → Choose OJS when you need simplicity
+
+Temporal is the gold standard for durable workflow orchestration. But not every job needs replay semantics and event sourcing. OJS covers background jobs, fan-out/fan-in, retries, and scheduling — the 90% case — with a fraction of the operational complexity.
+
+### vs Faktory → Choose OJS when you need an open standard
+
+Faktory shares OJS's vision of language-agnostic job processing. But Faktory is a single-vendor product with a proprietary TCP protocol. OJS is an open specification with multiple implementations, standard protocols (HTTP/gRPC), and a formal conformance suite.
+
+## Get started in 60 seconds
+
+<Tabs>
+  <TabItem label="Docker">
+```bash
+# Start the zero-dependency OJS server
+docker run -p 8080:8080 ghcr.io/openjobspec/ojs-lite:latest
+
+# Enqueue your first job
+curl -X POST http://localhost:8080/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type":"email.send","args":["user@example.com","welcome"]}'
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```bash
+npm install @openjobspec/sdk
+```
+```typescript
+import { OJSClient } from '@openjobspec/sdk';
+
+const client = new OJSClient({ url: 'http://localhost:8080' });
+const job = await client.enqueue('email.send', ['user@example.com', 'welcome']);
+console.log(`Job ${job.id} enqueued!`);
+```
+  </TabItem>
+  <TabItem label="Go">
+```bash
+go get github.com/openjobspec/ojs-go-sdk
+```
+```go
+client := ojs.NewClient(ojs.ClientConfig{URL: "http://localhost:8080"})
+job, _ := client.Enqueue(ctx, "email.send", "user@example.com", "welcome")
+fmt.Printf("Job %s enqueued!\n", job.ID)
+```
+  </TabItem>
+  <TabItem label="Python">
+```bash
+pip install openjobspec
+```
+```python
+from openjobspec import OJSClient
+
+client = OJSClient(url="http://localhost:8080")
+job = await client.enqueue("email.send", ["user@example.com", "welcome"])
+print(f"Job {job.id} enqueued!")
+```
+  </TabItem>
+</Tabs>
+
+<div class="cta-section">
+  <h2>Ready to try OJS?</h2>
+  <p>Start processing jobs in any language, on any backend, in under 2 minutes.</p>
+  <div class="cta-buttons">
+    <a href="/getting-started/quickstart/" class="cta-primary">Quickstart Guide</a>
+    <a href="/getting-started/comparison/" class="cta-secondary">Detailed Comparison</a>
+  </div>
+</div>

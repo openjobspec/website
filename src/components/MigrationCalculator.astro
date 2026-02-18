@@ -1,0 +1,339 @@
+---
+// Migration Calculator — client-side interactive component
+---
+
+<div class="migration-calculator" id="migration-calculator">
+  <div class="calc-grid">
+    <div class="calc-input-section">
+      <h3>Your current setup</h3>
+      
+      <div class="calc-field">
+        <label for="current-system">Current job system</label>
+        <select id="current-system">
+          <option value="temporal-cloud">Temporal Cloud</option>
+          <option value="sidekiq-pro">Sidekiq Pro</option>
+          <option value="sidekiq-enterprise">Sidekiq Enterprise</option>
+          <option value="bullmq-pro">BullMQ Pro</option>
+          <option value="custom">Custom / Self-built</option>
+        </select>
+      </div>
+
+      <div class="calc-field">
+        <label for="jobs-per-day">Jobs per day</label>
+        <input type="range" id="jobs-per-day" min="1000" max="10000000" value="100000" step="1000" />
+        <span class="calc-value" id="jobs-per-day-label">100,000</span>
+      </div>
+
+      <div class="calc-field">
+        <label for="team-size">Engineering team size</label>
+        <input type="range" id="team-size" min="1" max="100" value="5" step="1" />
+        <span class="calc-value" id="team-size-label">5</span>
+      </div>
+
+      <div class="calc-field">
+        <label for="num-languages">Languages in your stack</label>
+        <select id="num-languages">
+          <option value="1">1 language</option>
+          <option value="2" selected>2 languages</option>
+          <option value="3">3+ languages</option>
+        </select>
+      </div>
+
+      <div class="calc-field">
+        <label for="infra-provider">Cloud provider</label>
+        <select id="infra-provider">
+          <option value="aws" selected>AWS</option>
+          <option value="gcp">GCP</option>
+          <option value="azure">Azure</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="calc-results-section">
+      <h3>Estimated comparison</h3>
+      
+      <div class="calc-result-card current">
+        <div class="calc-result-label">Current estimated cost</div>
+        <div class="calc-result-amount" id="current-cost">$850/mo</div>
+        <div class="calc-result-detail" id="current-detail">Temporal Cloud: ~$0.00025/action × 100K jobs/day</div>
+      </div>
+
+      <div class="calc-result-card ojs">
+        <div class="calc-result-label">OJS self-hosted cost</div>
+        <div class="calc-result-amount" id="ojs-cost">$120/mo</div>
+        <div class="calc-result-detail" id="ojs-detail">ECS Fargate (2 vCPU) + RDS PostgreSQL (db.t3.medium)</div>
+      </div>
+
+      <div class="calc-savings">
+        <div class="calc-savings-label">Annual savings</div>
+        <div class="calc-savings-amount" id="annual-savings">$8,760</div>
+      </div>
+
+      <div class="calc-extras" id="calc-extras">
+        <div class="calc-extra-item">
+          <strong>Multi-language bonus:</strong> <span id="multi-lang-note">Eliminate 1 additional job queue library</span>
+        </div>
+        <div class="calc-extra-item">
+          <strong>Migration effort:</strong> <span id="migration-effort">~2-4 weeks with OJS migration tools</span>
+        </div>
+        <div class="calc-extra-item">
+          <strong>OJS license cost:</strong> Free forever (Apache 2.0)
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function initCalculator() {
+    const systemSelect = document.getElementById('current-system');
+    const jobsSlider = document.getElementById('jobs-per-day');
+    const teamSlider = document.getElementById('team-size');
+    const langSelect = document.getElementById('num-languages');
+    const infraSelect = document.getElementById('infra-provider');
+
+    const pricing = {
+      'temporal-cloud': { perAction: 0.00025, base: 200, name: 'Temporal Cloud' },
+      'sidekiq-pro': { perAction: 0, base: 163, name: 'Sidekiq Pro ($1,950/yr)' },
+      'sidekiq-enterprise': { perAction: 0, base: 329, name: 'Sidekiq Enterprise ($3,950/yr)' },
+      'bullmq-pro': { perAction: 0, base: 50, name: 'BullMQ Pro' },
+      'custom': { perAction: 0, base: 0, name: 'Custom system' },
+    };
+
+    const infraCosts = {
+      aws: { compute: 70, db: 50, label: 'ECS Fargate + RDS PostgreSQL' },
+      gcp: { compute: 60, db: 45, label: 'Cloud Run + Cloud SQL' },
+      azure: { compute: 65, db: 55, label: 'Container Instances + Azure Database' },
+    };
+
+    function formatNum(n) {
+      return n.toLocaleString('en-US');
+    }
+
+    function formatMoney(n) {
+      return '$' + formatNum(Math.round(n));
+    }
+
+    function calculate() {
+      const system = systemSelect.value;
+      const jobsPerDay = parseInt(jobsSlider.value);
+      const teamSize = parseInt(teamSlider.value);
+      const langs = parseInt(langSelect.value);
+      const infra = infraSelect.value;
+
+      document.getElementById('jobs-per-day-label').textContent = formatNum(jobsPerDay);
+      document.getElementById('team-size-label').textContent = teamSize;
+
+      // Current cost
+      const p = pricing[system];
+      const jobsPerMonth = jobsPerDay * 30;
+      let currentMonthly = p.base + (p.perAction * jobsPerMonth);
+
+      // Add Redis hosting cost for non-cloud solutions
+      if (system !== 'temporal-cloud') {
+        currentMonthly += 50; // Typical Redis hosting
+      }
+
+      // Custom system: estimate based on engineering time
+      if (system === 'custom') {
+        currentMonthly = teamSize * 200; // ~$200/dev/mo in maintenance overhead
+      }
+
+      // Add multi-language overhead
+      if (langs >= 2 && system !== 'temporal-cloud') {
+        currentMonthly += (langs - 1) * 100; // Additional queue libraries, maintenance
+      }
+
+      // OJS cost
+      const ic = infraCosts[infra];
+      let ojsMonthly = ic.compute + ic.db;
+
+      // Scale compute with job volume
+      if (jobsPerDay > 500000) ojsMonthly += 40;
+      if (jobsPerDay > 1000000) ojsMonthly += 80;
+      if (jobsPerDay > 5000000) ojsMonthly += 160;
+
+      const annualSavings = (currentMonthly - ojsMonthly) * 12;
+
+      document.getElementById('current-cost').textContent = formatMoney(currentMonthly) + '/mo';
+      document.getElementById('current-detail').textContent = p.name + (p.perAction > 0 ? ': ~$' + p.perAction + '/action × ' + formatNum(jobsPerMonth) + ' jobs/mo' : '');
+      document.getElementById('ojs-cost').textContent = formatMoney(ojsMonthly) + '/mo';
+      document.getElementById('ojs-detail').textContent = ic.label + ' (' + infra.toUpperCase() + ')';
+      
+      const savingsEl = document.getElementById('annual-savings');
+      savingsEl.textContent = formatMoney(Math.max(0, annualSavings)) + '/yr';
+      savingsEl.style.color = annualSavings > 0 ? '#16a34a' : '#dc2626';
+
+      // Multi-language note
+      const langNote = document.getElementById('multi-lang-note');
+      if (langs >= 2) {
+        langNote.textContent = 'Consolidate ' + langs + ' language-specific job queues into one standard';
+      } else {
+        langNote.textContent = 'Single language — still benefit from backend portability';
+      }
+
+      // Migration effort
+      const effortEl = document.getElementById('migration-effort');
+      if (jobsPerDay > 1000000) {
+        effortEl.textContent = '~4-8 weeks (large scale, recommend staged rollout)';
+      } else if (jobsPerDay > 100000) {
+        effortEl.textContent = '~2-4 weeks with OJS migration tools';
+      } else {
+        effortEl.textContent = '~1-2 weeks with OJS migration tools';
+      }
+    }
+
+    [systemSelect, jobsSlider, teamSlider, langSelect, infraSelect].forEach(el => {
+      el.addEventListener('input', calculate);
+      el.addEventListener('change', calculate);
+    });
+
+    calculate();
+  }
+
+  // Initialize when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCalculator);
+  } else {
+    initCalculator();
+  }
+</script>
+
+<style>
+  .migration-calculator {
+    margin: 2rem 0;
+  }
+
+  .calc-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+  }
+
+  @media (max-width: 768px) {
+    .calc-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .calc-input-section,
+  .calc-results-section {
+    background: var(--sl-color-gray-6);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+  }
+
+  .calc-input-section h3,
+  .calc-results-section h3 {
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+    font-size: 1.1rem;
+  }
+
+  .calc-field {
+    margin-bottom: 1.25rem;
+  }
+
+  .calc-field label {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--sl-color-gray-2);
+  }
+
+  .calc-field select,
+  .calc-field input[type="range"] {
+    width: 100%;
+  }
+
+  .calc-field select {
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    border: 1px solid var(--sl-color-gray-4);
+    background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+    color: var(--sl-color-white);
+    font-size: 0.9rem;
+  }
+
+  .calc-value {
+    display: inline-block;
+    margin-top: 0.25rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--sl-color-accent);
+  }
+
+  .calc-result-card {
+    padding: 1rem;
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .calc-result-card.current {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  .calc-result-card.ojs {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+  }
+
+  .calc-result-label {
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-2);
+    margin-bottom: 0.25rem;
+  }
+
+  .calc-result-amount {
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+
+  .calc-result-detail {
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-3);
+    margin-top: 0.25rem;
+  }
+
+  .calc-savings {
+    text-align: center;
+    padding: 1rem;
+    background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+    border: 2px solid var(--sl-color-accent);
+  }
+
+  .calc-savings-label {
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-2);
+  }
+
+  .calc-savings-amount {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #16a34a;
+  }
+
+  .calc-extras {
+    margin-top: 1rem;
+  }
+
+  .calc-extra-item {
+    font-size: 0.85rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--sl-color-gray-5);
+    color: var(--sl-color-gray-2);
+  }
+
+  .calc-extra-item:last-child {
+    border-bottom: none;
+  }
+
+  .calc-extra-item strong {
+    color: var(--sl-color-white);
+  }
+</style>
