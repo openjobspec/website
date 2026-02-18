@@ -1,0 +1,624 @@
+---
+title: Framework Integrations
+description: Official framework adapters for Go, JavaScript, Python, Java, Rust, and Ruby — connect OJS to your existing web stack.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+OJS provides official framework integration packages ("contrib" packages) for the most popular web frameworks in each language. These adapters connect OJS to your existing application stack with idiomatic APIs — request-scoped clients, dependency injection, transactional enqueue, and compatibility adapters for migration.
+
+All contrib packages are currently in **alpha** (API may change). Each package depends on the corresponding OJS SDK.
+
+## Integration matrix
+
+| Language | Framework | Package | Highlights |
+|----------|-----------|---------|------------|
+| Go | Gin | `ojs-gin` | Middleware, request-scoped client |
+| Go | Echo | `ojs-echo` | Middleware, context integration |
+| Go | Fiber | `ojs-fiber` | Middleware, Locals-based client |
+| Go | GORM | `ojs-gorm` | Transactional enqueue via after-commit hooks |
+| Go | AWS Lambda | `ojs-serverless` | Lambda handler adapter for SQS jobs |
+| JS/TS | Express | `@openjobspec/express` | Middleware, `req.ojs` client |
+| JS/TS | NestJS | `@openjobspec/nestjs` | Module, `@OjsJob()` decorator, DI |
+| JS/TS | Next.js | `@openjobspec/nextjs` | Server Actions, Route Handler helpers |
+| JS/TS | Fastify | `@openjobspec/fastify` | Plugin, decorator-based client |
+| JS/TS | BullMQ | `@openjobspec/bullmq` | BullMQ-compatible API for migration |
+| Python | Django | `openjobspec-django` | App, management commands, `on_commit` enqueue |
+| Python | Flask | `openjobspec-flask` | Extension, app factory pattern |
+| Python | FastAPI | `openjobspec-fastapi` | Dependency injection, lifespan management |
+| Python | Celery | `openjobspec-celery` | `@task` decorator, drop-in migration |
+| Python | SQLAlchemy | `openjobspec-sqlalchemy` | Transactional enqueue via session events |
+| Java | Spring Boot | `ojs-spring` | Auto-config, `@OjsJob`, Actuator health |
+| Java | Quarkus | `ojs-quarkus` | CDI extension, MicroProfile Health |
+| Java | Micronaut | `ojs-micronaut` | Bean factory, health indicator |
+| Rust | Actix-web | `ojs-actix` | Middleware, app data integration |
+| Rust | Axum | `ojs-axum` | State extractor, Tower layer |
+| Rust | Diesel | `ojs-diesel` | Transactional enqueue via connection callbacks |
+| Ruby | Rails | `ojs-rails` | ActiveJob adapter, Railtie, `after_commit` |
+| Ruby | Sinatra | `ojs-sinatra` | Extension, helper methods |
+| Ruby | Sidekiq | `ojs-sidekiq` | `perform_async` compat API for migration |
+
+---
+
+## Go integrations
+
+**Repository:** [`ojs-go-contrib`](https://github.com/openjobspec/ojs-go-contrib)
+
+<Tabs>
+<TabItem label="Gin">
+
+```bash
+go get github.com/openjobspec/ojs-go-contrib/ojs-gin
+```
+
+```go
+import (
+    ojs "github.com/openjobspec/ojs-go-sdk"
+    ojsgin "github.com/openjobspec/ojs-go-contrib/ojs-gin"
+)
+
+r := gin.Default()
+r.Use(ojsgin.Middleware(ojs.ClientConfig{URL: "http://localhost:8080"}))
+
+r.POST("/orders", func(c *gin.Context) {
+    client := ojsgin.Client(c)
+    job, _ := client.Enqueue(c.Request.Context(), "order.process", []any{orderID})
+    c.JSON(200, gin.H{"job_id": job.ID})
+})
+```
+
+</TabItem>
+<TabItem label="Echo">
+
+```bash
+go get github.com/openjobspec/ojs-go-contrib/ojs-echo
+```
+
+```go
+import ojsecho "github.com/openjobspec/ojs-go-contrib/ojs-echo"
+
+e := echo.New()
+e.Use(ojsecho.Middleware(ojs.ClientConfig{URL: "http://localhost:8080"}))
+
+e.POST("/orders", func(c echo.Context) error {
+    client := ojsecho.Client(c)
+    job, _ := client.Enqueue(c.Request().Context(), "order.process", []any{orderID})
+    return c.JSON(200, map[string]string{"job_id": job.ID})
+})
+```
+
+</TabItem>
+<TabItem label="Fiber">
+
+```bash
+go get github.com/openjobspec/ojs-go-contrib/ojs-fiber
+```
+
+```go
+import ojsfiber "github.com/openjobspec/ojs-go-contrib/ojs-fiber"
+
+app := fiber.New()
+app.Use(ojsfiber.Middleware(ojs.ClientConfig{URL: "http://localhost:8080"}))
+
+app.Post("/orders", func(c *fiber.Ctx) error {
+    client := ojsfiber.Client(c)
+    job, _ := client.Enqueue(c.Context(), "order.process", []any{orderID})
+    return c.JSON(fiber.Map{"job_id": job.ID})
+})
+```
+
+</TabItem>
+<TabItem label="GORM">
+
+```bash
+go get github.com/openjobspec/ojs-go-contrib/ojs-gorm
+```
+
+```go
+import ojsgorm "github.com/openjobspec/ojs-go-contrib/ojs-gorm"
+
+txClient := ojsgorm.NewTransactionalClient(db, ojsClient)
+
+// Job is enqueued only after the transaction commits
+txClient.WithTransaction(func(tx *gorm.DB) error {
+    tx.Create(&order)
+    return txClient.EnqueueAfterCommit(tx, "order.process", []any{order.ID})
+})
+```
+
+</TabItem>
+<TabItem label="AWS Lambda">
+
+```bash
+go get github.com/openjobspec/ojs-go-contrib/ojs-serverless
+```
+
+```go
+import ojslambda "github.com/openjobspec/ojs-go-contrib/ojs-serverless"
+
+func main() {
+    handler := ojslambda.NewSQSHandler(func(ctx ojslambda.JobContext) error {
+        // Process SQS-based OJS job
+        return nil
+    })
+    lambda.Start(handler.Handle)
+}
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## JavaScript / TypeScript integrations
+
+**Repository:** [`ojs-js-contrib`](https://github.com/openjobspec/ojs-js-contrib)
+
+<Tabs>
+<TabItem label="Express">
+
+```bash
+npm install @openjobspec/express @openjobspec/sdk
+```
+
+```ts
+import express from 'express';
+import { ojsMiddleware } from '@openjobspec/express';
+
+const app = express();
+app.use(ojsMiddleware({ url: 'http://localhost:8080' }));
+
+app.post('/orders', async (req, res) => {
+  const job = await req.ojs.enqueue('order.process', [req.body.orderId]);
+  res.json({ jobId: job.id });
+});
+```
+
+</TabItem>
+<TabItem label="NestJS">
+
+```bash
+npm install @openjobspec/nestjs @openjobspec/sdk
+```
+
+```ts
+import { OjsModule, OjsClient, OjsJob } from '@openjobspec/nestjs';
+
+@Module({
+  imports: [OjsModule.forRoot({ url: 'http://localhost:8080' })],
+})
+export class AppModule {}
+
+@Injectable()
+export class OrderService {
+  constructor(private readonly ojs: OjsClient) {}
+
+  async createOrder(data: OrderDto) {
+    return this.ojs.enqueue('order.process', [data.id]);
+  }
+}
+```
+
+</TabItem>
+<TabItem label="Next.js">
+
+```bash
+npm install @openjobspec/nextjs @openjobspec/sdk
+```
+
+```ts
+// app/actions.ts
+import { enqueueJob } from '@openjobspec/nextjs';
+
+export async function submitOrder(formData: FormData) {
+  'use server';
+  const job = await enqueueJob('order.process', [formData.get('id')]);
+  return { jobId: job.id };
+}
+```
+
+</TabItem>
+<TabItem label="Fastify">
+
+```bash
+npm install @openjobspec/fastify @openjobspec/sdk
+```
+
+```ts
+import fastify from 'fastify';
+import { ojsPlugin } from '@openjobspec/fastify';
+
+const app = fastify();
+app.register(ojsPlugin, { url: 'http://localhost:8080' });
+
+app.post('/orders', async (req, reply) => {
+  const job = await app.ojs.enqueue('order.process', [req.body.orderId]);
+  return { jobId: job.id };
+});
+```
+
+</TabItem>
+<TabItem label="BullMQ Compat">
+
+```bash
+npm install @openjobspec/bullmq @openjobspec/sdk
+```
+
+```ts
+import { Queue, Worker } from '@openjobspec/bullmq';
+
+// Same BullMQ API, backed by OJS
+const queue = new Queue('orders', { connection: { url: 'http://localhost:8080' } });
+await queue.add('process', { orderId: '123' });
+
+const worker = new Worker('orders', async (job) => {
+  console.log('Processing:', job.data.orderId);
+}, { connection: { url: 'http://localhost:8080' } });
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## Python integrations
+
+**Repository:** [`ojs-python-contrib`](https://github.com/openjobspec/ojs-python-contrib)
+
+<Tabs>
+<TabItem label="Django">
+
+```bash
+pip install openjobspec-django
+```
+
+```python
+# settings.py
+INSTALLED_APPS = ['openjobspec_django']
+OJS_URL = 'http://localhost:8080'
+
+# views.py
+from openjobspec_django import get_ojs_client
+
+def create_order(request):
+    client = get_ojs_client()
+    # Enqueues only after the transaction commits
+    job = client.enqueue_after_commit("order.process", [order.id])
+    return JsonResponse({"job_id": job.id})
+```
+
+</TabItem>
+<TabItem label="Flask">
+
+```bash
+pip install openjobspec-flask
+```
+
+```python
+from flask import Flask
+from openjobspec_flask import OJS
+
+app = Flask(__name__)
+ojs = OJS(app, url='http://localhost:8080')
+
+@app.route('/orders', methods=['POST'])
+async def create_order():
+    job = await ojs.client.enqueue('order.process', [order_id])
+    return {'job_id': job.id}
+```
+
+</TabItem>
+<TabItem label="FastAPI">
+
+```bash
+pip install openjobspec-fastapi
+```
+
+```python
+from fastapi import FastAPI, Depends
+from openjobspec_fastapi import ojs_client, OJSClient
+
+app = FastAPI()
+
+@app.post('/orders')
+async def create_order(ojs: OJSClient = Depends(ojs_client)):
+    job = await ojs.enqueue('order.process', [order_id])
+    return {'job_id': job.id}
+```
+
+</TabItem>
+<TabItem label="Celery Compat">
+
+```bash
+pip install openjobspec-celery
+```
+
+```python
+from openjobspec_celery import task
+
+# Same Celery decorator, backed by OJS
+@task(queue='orders')
+def process_order(order_id: str):
+    # Your existing Celery task code works as-is
+    ...
+
+process_order.delay('order-123')
+```
+
+</TabItem>
+<TabItem label="SQLAlchemy">
+
+```bash
+pip install openjobspec-sqlalchemy
+```
+
+```python
+from openjobspec_sqlalchemy import TransactionalClient
+
+tx_client = TransactionalClient(session, ojs_client)
+
+with session.begin():
+    session.add(order)
+    tx_client.enqueue_after_commit('order.process', [order.id])
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## Java integrations
+
+**Repository:** [`ojs-java-contrib`](https://github.com/openjobspec/ojs-java-contrib)
+
+<Tabs>
+<TabItem label="Spring Boot">
+
+```xml
+<dependency>
+  <groupId>org.openjobspec</groupId>
+  <artifactId>ojs-spring</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+
+```java
+@SpringBootApplication
+@EnableOjs
+public class App { }
+
+@Service
+public class OrderService {
+    @Autowired private OjsClient ojs;
+
+    @Transactional
+    public void createOrder(Order order) {
+        orderRepo.save(order);
+        ojs.enqueue("order.process", List.of(order.getId()));
+    }
+}
+```
+
+Spring Boot auto-configuration provides `OjsClient` bean, Actuator health indicator, and `@OjsJob` annotation for handler registration.
+
+</TabItem>
+<TabItem label="Quarkus">
+
+```xml
+<dependency>
+  <groupId>org.openjobspec</groupId>
+  <artifactId>ojs-quarkus</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+
+```java
+@ApplicationScoped
+public class OrderService {
+    @Inject OjsClient ojs;
+
+    public void createOrder(Order order) {
+        ojs.enqueue("order.process", List.of(order.getId()));
+    }
+}
+```
+
+CDI extension with MicroProfile Health integration.
+
+</TabItem>
+<TabItem label="Micronaut">
+
+```xml
+<dependency>
+  <groupId>org.openjobspec</groupId>
+  <artifactId>ojs-micronaut</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+
+```java
+@Singleton
+public class OrderService {
+    private final OjsClient ojs;
+
+    public OrderService(OjsClient ojs) { this.ojs = ojs; }
+
+    public void createOrder(Order order) {
+        ojs.enqueue("order.process", List.of(order.getId()));
+    }
+}
+```
+
+Bean factory with `@OjsJob` support and health indicator.
+
+</TabItem>
+</Tabs>
+
+---
+
+## Rust integrations
+
+**Repository:** [`ojs-rust-contrib`](https://github.com/openjobspec/ojs-rust-contrib)
+
+<Tabs>
+<TabItem label="Actix-web">
+
+```toml
+[dependencies]
+ojs-actix = "0.1"
+```
+
+```rust
+use ojs_actix::{OjsMiddleware, OjsClient};
+
+let client = OjsClient::new("http://localhost:8080");
+
+HttpServer::new(move || {
+    App::new()
+        .app_data(web::Data::new(client.clone()))
+        .wrap(OjsMiddleware::new())
+        .route("/orders", web::post().to(create_order))
+})
+```
+
+</TabItem>
+<TabItem label="Axum">
+
+```toml
+[dependencies]
+ojs-axum = "0.1"
+```
+
+```rust
+use ojs_axum::{OjsState, OjsLayer};
+
+let app = Router::new()
+    .route("/orders", post(create_order))
+    .layer(OjsLayer::new("http://localhost:8080"))
+    .with_state(OjsState::new());
+
+async fn create_order(State(ojs): State<OjsState>) -> Json<Value> {
+    let job = ojs.client().enqueue("order.process", &[order_id]).await?;
+    Json(json!({"job_id": job.id}))
+}
+```
+
+</TabItem>
+<TabItem label="Diesel">
+
+```toml
+[dependencies]
+ojs-diesel = "0.1"
+```
+
+```rust
+use ojs_diesel::TransactionalClient;
+
+let tx_client = TransactionalClient::new(&conn, &ojs_client);
+
+conn.transaction(|conn| {
+    diesel::insert_into(orders).values(&new_order).execute(conn)?;
+    tx_client.enqueue_after_commit("order.process", &[order.id])?;
+    Ok(())
+})?;
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## Ruby integrations
+
+**Repository:** [`ojs-ruby-contrib`](https://github.com/openjobspec/ojs-ruby-contrib)
+
+<Tabs>
+<TabItem label="Rails">
+
+```ruby
+# Gemfile
+gem 'ojs-rails'
+```
+
+```ruby
+# config/application.rb
+config.active_job.queue_adapter = :ojs
+
+# app/jobs/order_job.rb
+class OrderJob < ApplicationJob
+  queue_as :orders
+
+  def perform(order_id)
+    order = Order.find(order_id)
+    order.process!
+  end
+end
+
+# app/controllers/orders_controller.rb
+OrderJob.perform_later(order.id)  # Enqueued via after_commit
+```
+
+Railtie auto-configuration reads from `config/ojs.yml` or environment variables.
+
+</TabItem>
+<TabItem label="Sinatra">
+
+```ruby
+# Gemfile
+gem 'ojs-sinatra'
+```
+
+```ruby
+require 'sinatra'
+require 'ojs/sinatra'
+
+register OJS::Sinatra
+
+configure { set :ojs_url, 'http://localhost:8080' }
+
+post '/orders' do
+  job = ojs.enqueue('order.process', [params[:order_id]])
+  json job_id: job.id
+end
+```
+
+</TabItem>
+<TabItem label="Sidekiq Compat">
+
+```ruby
+# Gemfile
+gem 'ojs-sidekiq'
+```
+
+```ruby
+require 'ojs/sidekiq'
+
+class OrderWorker
+  include OJS::Sidekiq::Worker
+  sidekiq_options queue: 'orders'
+
+  def perform(order_id)
+    # Your existing Sidekiq worker code works as-is
+    Order.find(order_id).process!
+  end
+end
+
+OrderWorker.perform_async('order-123')
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## Compatibility adapters
+
+Three contrib packages provide **drop-in compatibility** with existing job systems, enabling incremental migration:
+
+| Adapter | Original System | What it does |
+|---------|----------------|--------------|
+| `@openjobspec/bullmq` | BullMQ | `Queue` and `Worker` classes backed by OJS |
+| `openjobspec-celery` | Celery | `@task` decorator backed by OJS |
+| `ojs-sidekiq` | Sidekiq | `perform_async` API backed by OJS |
+
+These adapters let you switch from the original system to OJS by changing a single import, without rewriting handler code. See the [migration guides](/guides/migrate-from-sidekiq/) for detailed walkthroughs.

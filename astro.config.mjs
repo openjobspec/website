@@ -150,6 +150,10 @@ export default defineConfig({
           items: [
             { label: 'Backends', slug: 'ecosystem/backends' },
             { label: 'SDKs', slug: 'ecosystem/sdks' },
+            {
+              label: 'Framework Integrations',
+              slug: 'ecosystem/integrations',
+            },
             { label: 'Tools', slug: 'ecosystem/tools' },
           ],
         },
