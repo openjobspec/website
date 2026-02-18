@@ -25,6 +25,7 @@ export default defineConfig({
           items: [
             { label: 'Quickstart', slug: 'getting-started/quickstart' },
             { label: 'Core Concepts', slug: 'getting-started/concepts' },
+            { label: 'Why OJS?', slug: 'getting-started/comparison' },
           ],
         },
         {

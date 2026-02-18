@@ -1,0 +1,201 @@
+---
+title: Why Open Job Spec?
+description: See how OJS compares to existing job frameworks like Sidekiq, BullMQ, Celery, Faktory, and Temporal.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every job framework today — Sidekiq, BullMQ, Celery, Faktory — invents its own wire format, retry semantics, and lifecycle model. **Open Job Spec (OJS)** replaces that fragmentation with a single, well-specified standard.
+
+Think of it as [CloudEvents](https://cloudevents.io), but for background jobs.
+
+## At a glance
+
+| | OJS | Sidekiq | BullMQ | Celery | Faktory | Temporal |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Open specification** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Language-agnostic** | ✅ | ❌ Ruby | ❌ JS/TS | ❌ Python | ✅ | ✅ |
+| **Official SDKs** | 6 | 1 | 1 | 1 | 4 | 4 |
+| **Backend choices** | 5 | 1 (Redis) | 1 (Redis) | 3 | 1 (Redis) | 1 (self) |
+| **Formal job lifecycle** | 8-state | 3-state | ~5-state | ~5-state | 5-state | N/A |
+| **Conformance test suite** | ✅ 194 tests | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Protocol bindings** | HTTP, gRPC, AMQP | Redis protocol | Redis protocol | AMQP | TCP custom | gRPC |
+| **Wire formats** | JSON, Protobuf | JSON | JSON | JSON/Pickle | JSON | Protobuf |
+| **Workflow primitives** | chain, group, batch | ❌ (Pro) | flow | chain, group, chord | ❌ | Full DSL |
+| **Cron scheduling** | ✅ | ❌ (Enterprise) | ✅ | ✅ (beat) | ✅ | ✅ |
+| **Unique jobs** | ✅ | ❌ (Enterprise) | ✅ | ❌ (plugin) | ✅ | ✅ (idempotency) |
+| **Middleware** | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ (interceptors) |
+| **Admin UI** | ✅ | ✅ (Web UI) | ✅ (Board) | ✅ (Flower) | ✅ | ✅ (Web UI) |
+| **License** | Apache 2.0 | LGPL / Commercial | MIT | BSD | GPL / Commercial | MIT |
+
+## OJS is a standard, not a product
+
+Most job frameworks are **products**: tightly coupled libraries where the producer, consumer, and broker all speak the same proprietary protocol. If you pick Sidekiq, you're locked into Ruby. If you pick BullMQ, you're locked into Node.js. If you pick Celery, you're locked into Python.
+
+OJS is different. It defines a **vendor-neutral envelope format** and **protocol bindings** that any language can implement. This means:
+
+- A **Go service** can enqueue a job that a **Python worker** processes
+- You can swap from a **Redis** backend to **PostgreSQL** without changing your SDK code
+- Third-party backends and SDKs can be **conformance-tested** against the spec
+
+<Aside type="tip">
+OJS doesn't replace your favorite language's job library — it gives all of them a common language to speak.
+</Aside>
+
+## Detailed comparison
+
+### vs Sidekiq
+
+[Sidekiq](https://sidekiq.org) is the most popular background job library for Ruby, known for its performance and simplicity.
+
+| Aspect | OJS | Sidekiq |
+|:---|:---|:---|
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | Ruby only |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | Redis only |
+| **Job format** | Standardized envelope with specversion | Sidekiq-specific JSON |
+| **Lifecycle states** | 8 (scheduled, available, pending, active, completed, retryable, cancelled, discarded) | 3 (enqueued, busy, dead) |
+| **Retry strategy** | Configurable per-job (exponential, linear, custom) | Global exponential backoff |
+| **Workflows** | Built-in: chain, group, batch | Sidekiq Pro/Enterprise (paid) |
+| **Unique jobs** | Built-in with configurable scope | Sidekiq Enterprise (paid) |
+| **Protocol** | HTTP + gRPC + AMQP | Redis protocol (internal) |
+| **Conformance tests** | 194 test cases across 5 levels | None |
+
+**When to choose Sidekiq:** You're building a Ruby-only application, want battle-tested production maturity, and don't need cross-language interop.
+
+**When to choose OJS:** You have a polyglot architecture, want backend flexibility, or need a formal specification for compliance.
+
+### vs BullMQ
+
+[BullMQ](https://bullmq.io) is the leading Redis-backed job queue for Node.js/TypeScript, with rich features and excellent documentation.
+
+| Aspect | OJS | BullMQ |
+|:---|:---|:---|
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | TypeScript/JavaScript (Python via bullmq) |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | Redis only |
+| **Job format** | Standardized envelope | BullMQ-specific JSON |
+| **Flow/workflows** | chain, group, batch | FlowProducer (parent-child DAGs) |
+| **Rate limiting** | Spec-defined per-queue | Built-in per-queue |
+| **Job priority** | Spec-defined | Built-in |
+| **Sandboxed workers** | N/A (process isolation via SDK) | Built-in sandboxed processors |
+| **Metrics** | Prometheus-native | Telemetry events |
+
+**When to choose BullMQ:** You're in a Node.js-first environment, need advanced flow patterns, and want deep Redis integration.
+
+**When to choose OJS:** You need language-agnostic processing, want to avoid Redis lock-in, or need a standardized API across teams.
+
+### vs Celery
+
+[Celery](https://docs.celeryq.dev/) is the de facto standard for distributed task queues in Python, with a large ecosystem and extensive documentation.
+
+| Aspect | OJS | Celery |
+|:---|:---|:---|
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | Python (with limited cross-language via AMQP) |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | RabbitMQ, Redis, SQS |
+| **Job format** | Standardized envelope | Celery-specific message format |
+| **Task discovery** | Explicit registration by job type | Auto-discovery via imports |
+| **Lifecycle** | 8-state formal model | ~5 states (PENDING, STARTED, SUCCESS, FAILURE, RETRY) |
+| **Scheduling** | Built-in cron extension | celery-beat (separate process) |
+| **Canvas** | chain, group, batch | chain, group, chord, starmap |
+| **Configuration** | Per-job and per-queue | Global app config |
+
+**When to choose Celery:** You're building a Python-first application, need advanced canvas patterns, and have an established RabbitMQ infrastructure.
+
+**When to choose OJS:** You need a language-agnostic standard, want typed SDKs in 6 languages, or need formal lifecycle guarantees.
+
+### vs Faktory
+
+[Faktory](https://contribsys.com/faktory/) is a language-agnostic job server created by Mike Perham (the author of Sidekiq).
+
+| Aspect | OJS | Faktory |
+|:---|:---|:---|
+| **Architecture** | Open specification + reference backends | Proprietary server + client SDKs |
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | Go, Ruby, Python, JavaScript/TypeScript |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | Redis (built-in) |
+| **Protocol** | HTTP, gRPC, AMQP | Custom TCP protocol |
+| **Specification** | Open, RFC-driven | Closed, single-vendor |
+| **Lifecycle** | 8-state formal model | 5-state (enqueued, working, scheduled, retries, dead) |
+| **Conformance testing** | 194 tests, 5 levels | None |
+| **Deployment** | Any backend, any cloud | Single binary server |
+| **License** | Apache 2.0 | GPL (OSS) / Commercial |
+
+**When to choose Faktory:** You want a simple, self-contained job server with minimal configuration and trust Mike Perham's track record.
+
+**When to choose OJS:** You want an open standard with multiple backends, no vendor lock-in, and formal interoperability guarantees.
+
+### vs Temporal
+
+[Temporal](https://temporal.io) is a durable execution platform for orchestrating complex workflows with full replay semantics.
+
+| Aspect | OJS | Temporal |
+|:---|:---|:---|
+| **Focus** | Background job processing | Durable workflow orchestration |
+| **Complexity** | Simple: enqueue → process | Complex: workflow replay, event sourcing |
+| **Lifecycle** | 8-state job model | Workflow execution states + activity states |
+| **Workflows** | chain, group, batch (primitives) | Full workflow DSL with deterministic replay |
+| **Infrastructure** | Choose your backend | Temporal Server (self-hosted or cloud) |
+| **Learning curve** | Low — familiar job queue patterns | High — requires understanding deterministic constraints |
+| **Best for** | Independent background tasks, fan-out/fan-in | Long-running business processes, sagas, orchestration |
+
+**When to choose Temporal:** You need durable execution with automatic recovery, long-running business workflows, or saga patterns.
+
+**When to choose OJS:** You need simple background job processing, want backend flexibility, or don't need Temporal's workflow complexity.
+
+## The OJS advantage
+
+### 1. Formal specification
+
+OJS is the only background job standard with a formal, RFC-driven specification process. Every behavior is precisely defined using [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) keywords (MUST, SHOULD, MAY), ensuring consistent behavior across all implementations.
+
+### 2. Conformance testing
+
+The [OJS conformance suite](/reference/conformance) includes 194 language-agnostic test cases organized into 5 levels. Any backend claiming OJS compliance can be independently verified — no more "works on my machine" interoperability issues.
+
+### 3. Backend freedom
+
+OJS ships with 5 reference backends today:
+
+| Backend | Best for |
+|:---|:---|
+| **Redis** | Low-latency, high-throughput workloads |
+| **PostgreSQL** | Transactional consistency, existing Postgres infrastructure |
+| **NATS** | Cloud-native, lightweight messaging |
+| **Kafka** | High-throughput streaming, event-driven architectures |
+| **SQS** | AWS-native, serverless, managed infrastructure |
+
+All five pass all 5 conformance levels. Switch between them by changing a connection string — your SDK code stays the same.
+
+### 4. True polyglot
+
+OJS provides first-class SDKs in 6 languages with identical feature sets:
+
+```bash
+# Go
+go get github.com/openjobspec/ojs-go-sdk
+
+# TypeScript / JavaScript
+npm install @openjobspec/sdk
+
+# Python
+pip install openjobspec
+
+# Java
+# Maven Central: org.openjobspec:ojs-sdk
+
+# Rust
+cargo add ojs
+
+# Ruby
+gem install ojs
+```
+
+Every SDK supports: Client, Worker, Workflows (chain/group/batch), Middleware, and Graceful Shutdown.
+
+### 5. Open governance
+
+OJS is developed in the open under [Apache 2.0](https://github.com/openjobspec/openjobspec/blob/main/LICENSE). All specification changes go through a [staged RFC process](/governance/rfc-process) with community review. There is no single vendor that controls the standard.
+
+## Ready to get started?
+
+- [**Quickstart →**](/getting-started/quickstart) — Enqueue your first job in under 2 minutes
+- [**Core Concepts →**](/getting-started/concepts) — Understand the job envelope and lifecycle
+- [**Tutorials →**](/tutorials/your-first-job-go) — Step-by-step guides for each language
