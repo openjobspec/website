@@ -16,6 +16,14 @@ An OJS backend is the storage and coordination layer that sits between clients (
 
 The key design principle is **server-side intelligence**. Retry decisions, scheduling, state transitions, and backoff calculations all happen in your backend. SDKs stay thin.
 
+:::tip[Go backends: use the shared library]
+If you are building a Go backend, the [`ojs-go-backend-common`](https://github.com/openjobspec/ojs-go-backend-common) module provides shared types used by all official backends — `Job` model, 8-state machine, validation, error types, retry policies, UUIDv7 generation, and ISO 8601 duration parsing. Import it to avoid reimplementing these fundamentals.
+
+```go
+import "github.com/openjobspec/ojs-go-backend-common/core"
+```
+:::
+
 ## The Backend interface
 
 Looking at the official Go implementations, here is the core interface your backend needs to satisfy:
