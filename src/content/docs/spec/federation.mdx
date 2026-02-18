@@ -1,0 +1,168 @@
+---
+title: "Federation"
+description: "Multi-region job routing, failover, and cross-region coordination"
+---
+
+The federation extension enables multiple independent OJS deployments — each operating in a distinct geographic region — to cooperate as a unified logical system. Jobs can be routed to specific regions based on affinity rules, overflow capacity, or geo-pinning constraints.
+
+:::note[Extension status]
+Federation is a **Stage 0 (Proposal)** extension. The specification is defined in [`spec/ojs-federation.md`](https://github.com/openjobspec/openjobspec/blob/main/spec/ojs-federation.md) and the RFC in [`spec/rfcs/rfc-federation.md`](https://github.com/openjobspec/openjobspec/blob/main/spec/rfcs/rfc-federation.md).
+:::
+
+## Design Principles
+
+1. **Client-side composition.** Federation is a routing layer above standard OJS clients. Backends are unaware of federation and require no changes.
+2. **Explicit routing.** Every job is routed by an explicit strategy — affinity, overflow, or geo-pin. There is no hidden load balancer.
+3. **Eventual consistency.** Cross-region metadata replication uses eventual consistency. Strong cross-region consistency is a non-goal.
+4. **Graceful degradation.** When a region becomes unhealthy, the federation layer routes to healthy regions automatically.
+
+## Topology Models
+
+### Hub-Spoke
+
+A single hub region coordinates cross-region routing. Spoke regions route through the hub. Simplest to operate, but the hub is a single point of failure for cross-region operations.
+
+```
+        ┌─────────┐
+        │   Hub   │
+        │us-east-1│
+        └────┬────┘
+         ┌───┼───┐
+    ┌────┴┐     ┌┴────┐
+    │eu-1 │     │ap-1 │
+    └─────┘     └─────┘
+```
+
+### Mesh
+
+Every region communicates directly with every other. No central coordinator. Highest availability but O(n²) connections. Practical for ≤5 regions.
+
+### Active-Active
+
+All regions accept writes independently. Optional cross-region replication provides eventual visibility of job metadata. Conflict resolution uses last-writer-wins.
+
+## Routing Strategies
+
+### Affinity (default)
+
+Route to the local region if healthy. Fall back to the next-closest healthy region by latency.
+
+```json
+{
+  "type": "email.send",
+  "args": ["user@example.com", "welcome"],
+  "meta": {
+    "ojs.federation.federation_id": "01912e4a-7b3c-7def-8a12-abcdef123456",
+    "ojs.federation.region_affinity": "affinity"
+  }
+}
+```
+
+### Overflow
+
+Route to the region with the lowest current load. Balances work across regions for throughput-sensitive batch workloads.
+
+```json
+{
+  "type": "video.transcode",
+  "args": ["/input/video.mp4", "1080p"],
+  "meta": {
+    "ojs.federation.federation_id": "01912e4a-8c4d-7ef0-9b23-bcdef1234567",
+    "ojs.federation.region_affinity": "overflow"
+  }
+}
+```
+
+### Geo-Pin
+
+Job MUST execute in the specified region. Returns an error if the region is unavailable — geo-pinned jobs are never re-routed. Use for data residency compliance (e.g., GDPR).
+
+```json
+{
+  "type": "user.data.export",
+  "args": ["usr_12345"],
+  "meta": {
+    "ojs.federation.federation_id": "01912e4a-9d5e-7f01-ac34-cdef12345678",
+    "ojs.federation.region": "eu-west-1",
+    "ojs.federation.region_affinity": "geo-pin"
+  }
+}
+```
+
+## Region Discovery and Health
+
+### Region Registry
+
+A federation is configured with a registry of participating regions:
+
+| Field    | Type     | Required | Description                                  |
+|----------|----------|----------|----------------------------------------------|
+| `id`     | string   | Yes      | Unique region identifier (e.g., `us-east-1`) |
+| `url`    | string   | Yes      | Base URL of the OJS server                   |
+| `weight` | integer  | No       | Routing weight. Default: `1`                 |
+| `tags`   | string[] | No       | Capability tags (e.g., `["gpu"]`)            |
+
+### Health Checking
+
+Each region is monitored by calling `GET /ojs/v1/health` at a configurable interval (default: 10 seconds). Regions are healthy when they return HTTP 200 with `"status": "ok"`.
+
+### Circuit Breaker
+
+Per-region circuit breakers prevent cascading failures:
+
+| State      | Behavior                              | Transition                            |
+|------------|---------------------------------------|---------------------------------------|
+| `closed`   | Requests flow normally                | → `open` after 5 consecutive failures |
+| `open`     | All requests rejected immediately     | → `half-open` after 30s cooldown      |
+| `half-open`| Single probe request                  | → `closed` on success; `open` on fail |
+
+## Wire Format
+
+Federation attributes are encoded in the job's `meta` object with the `ojs.federation.` prefix:
+
+| Attribute                          | Type   | Description                                      |
+|------------------------------------|--------|--------------------------------------------------|
+| `ojs.federation.federation_id`     | string | UUIDv7 for cross-region tracking                 |
+| `ojs.federation.region`            | string | Target region for geo-pin routing                |
+| `ojs.federation.region_affinity`   | string | `affinity`, `overflow`, or `geo-pin`             |
+| `ojs.federation.replicated_from`   | string | Origin region for replicated jobs                |
+
+This encoding ensures full backward compatibility — non-federated servers ignore these attributes.
+
+## API Extensions
+
+### `GET /v1/federation/regions`
+
+Returns the region registry with health status.
+
+### `POST /v1/federation/route`
+
+Resolves the target region for a job without enqueuing. Useful for dry-run validation.
+
+### `GET /v1/federation/health`
+
+Returns aggregate federation health, per-region status, and replication lag.
+
+## Security
+
+- All inter-region communication MUST use HTTPS
+- Mutual TLS (mTLS) is RECOMMENDED for production
+- Geo-pinned jobs MUST NOT be forwarded to non-permitted regions during failover
+- Each region SHOULD maintain independent authentication credentials
+
+## Failover
+
+When a region becomes unavailable:
+
+1. Circuit breaker opens for the failed region
+2. Alternate region selected based on routing strategy:
+   - **Affinity**: Next-closest healthy region
+   - **Overflow**: Least-loaded healthy region
+   - **Geo-pin**: Error returned (no failover)
+3. Structured `ojs.federation.failover` event emitted
+
+## Consistency Model
+
+- **Replication** is optional. Replicated jobs carry `ojs.federation.replicated_from` to prevent infinite loops.
+- **Conflict resolution** uses last-writer-wins based on `enqueued_at` timestamps.
+- **Strong consistency** across regions is explicitly a non-goal.

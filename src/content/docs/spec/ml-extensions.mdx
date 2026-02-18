@@ -1,0 +1,199 @@
+---
+title: "ML Extensions"
+description: "ML pipeline orchestration: model metadata, training, inference, evaluation, and artifact management"
+---
+
+The ML Extensions specification defines pipeline-level attributes for AI/ML workloads. It complements the [ML Resources](/spec/ml-resources) extension (which handles compute infrastructure) with semantic metadata about the ML task itself.
+
+| Extension       | Prefix      | Focus                                           |
+|----------------|-------------|--------------------------------------------------|
+| ML Resources    | `ext_ml_`   | GPU/TPU/CPU requirements, scheduling, preemption |
+| **ML Extensions** | `ext_mlx_` | Model metadata, training, inference, evaluation  |
+
+## Model Metadata
+
+Describe the model a job operates on, including framework and I/O schemas.
+
+| Attribute                       | Type   | Description                                  |
+|---------------------------------|--------|----------------------------------------------|
+| `ext_mlx_model_name`            | string | Human-readable model name                    |
+| `ext_mlx_model_version`         | string | Semantic version of the model artifact       |
+| `ext_mlx_model_framework`       | string | `pytorch`, `tensorflow`, `onnx`, `jax`, `sklearn`, `xgboost`, `custom` |
+| `ext_mlx_model_input_schema`    | object | JSON Schema for expected model input         |
+| `ext_mlx_model_output_schema`   | object | JSON Schema for expected model output        |
+| `ext_mlx_experiment_id`         | string | Experiment tracker ID                        |
+| `ext_mlx_run_id`                | string | Run ID within the experiment                 |
+
+## Training Jobs
+
+Training attributes describe datasets, hyperparameters, and output locations.
+
+```json
+{
+  "type": "ml.train",
+  "ext_ml_gpu_type": "nvidia-a100",
+  "ext_ml_gpu_count": 4,
+  "ext_ml_precision": "bf16",
+  "ext_mlx_model_name": "llama-3.1-8b-custom",
+  "ext_mlx_model_framework": "pytorch",
+  "ext_mlx_training_dataset_uri": "s3://datasets/train.parquet",
+  "ext_mlx_training_hyperparameters": {
+    "learning_rate": 2e-5,
+    "batch_size": 16,
+    "weight_decay": 0.01,
+    "seed": 42
+  },
+  "ext_mlx_training_epochs": 3,
+  "ext_mlx_training_output_model_uri": "s3://models/custom/v1.0.0/"
+}
+```
+
+| Attribute                            | Type    | Description                          |
+|--------------------------------------|---------|--------------------------------------|
+| `ext_mlx_training_dataset_uri`       | string  | Training dataset URI                 |
+| `ext_mlx_training_validation_uri`    | string  | Validation dataset URI               |
+| `ext_mlx_training_hyperparameters`   | object  | Key-value map of hyperparameters     |
+| `ext_mlx_training_epochs`            | integer | Number of training epochs            |
+| `ext_mlx_training_checkpoint_uri`    | string  | URI for saving checkpoints           |
+| `ext_mlx_training_resume_from`       | string  | Checkpoint URI to resume from        |
+| `ext_mlx_training_output_model_uri`  | string  | Output model artifact URI            |
+
+## Inference Jobs
+
+Configure how a trained model processes input data.
+
+```json
+{
+  "type": "ml.inference",
+  "ext_ml_gpu_type": "nvidia-l4",
+  "ext_ml_gpu_count": 1,
+  "ext_mlx_model_name": "intent-classifier",
+  "ext_mlx_model_framework": "onnx",
+  "ext_mlx_inference_model_uri": "s3://models/classifier/v3.1.0/model.onnx",
+  "ext_mlx_inference_batch_size": 256,
+  "ext_mlx_inference_input_uri": "s3://data/input.jsonl",
+  "ext_mlx_inference_output_uri": "s3://data/output.jsonl",
+  "ext_mlx_inference_mode": "batch"
+}
+```
+
+| Attribute                          | Type    | Description                           |
+|------------------------------------|---------|---------------------------------------|
+| `ext_mlx_inference_model_uri`      | string  | Model artifact URI                    |
+| `ext_mlx_inference_batch_size`     | integer | Inputs per batch                      |
+| `ext_mlx_inference_timeout_ms`     | integer | Per-request timeout (ms)              |
+| `ext_mlx_inference_input_uri`      | string  | Input data URI (batch mode)           |
+| `ext_mlx_inference_output_uri`     | string  | Output data URI                       |
+| `ext_mlx_inference_mode`           | string  | `batch`, `streaming`, or `realtime`   |
+
+## Data Preprocessing Jobs
+
+Describe data transformations that prepare raw data for training or inference.
+
+| Attribute                            | Type   | Description                            |
+|--------------------------------------|--------|----------------------------------------|
+| `ext_mlx_preprocess_input_uri`       | string | Raw input data URI                     |
+| `ext_mlx_preprocess_output_uri`      | string | Processed output URI                   |
+| `ext_mlx_preprocess_input_format`    | string | `csv`, `parquet`, `json`, `jsonl`, `tfrecord`, `arrow`, `custom` |
+| `ext_mlx_preprocess_output_format`   | string | Output format (same enum)              |
+| `ext_mlx_preprocess_transformations` | array  | Ordered list of transformations        |
+| `ext_mlx_preprocess_split_ratios`    | object | Train/validation/test split ratios     |
+
+Transformation types: `tokenize`, `normalize`, `augment`, `filter`, `sample`, `deduplicate`, `encode`.
+
+## Evaluation Jobs
+
+Assess model quality with metrics and thresholds that can gate deployment.
+
+```json
+{
+  "type": "ml.evaluate",
+  "ext_mlx_eval_dataset_uri": "s3://data/test.parquet",
+  "ext_mlx_eval_model_uri": "s3://models/v1.0.0/",
+  "ext_mlx_eval_metrics": ["accuracy", "f1", "latency_p99"],
+  "ext_mlx_eval_thresholds": {
+    "accuracy": { "min": 0.92 },
+    "f1": { "min": 0.88 },
+    "latency_p99": { "max": 100 }
+  }
+}
+```
+
+| Attribute                       | Type   | Description                         |
+|---------------------------------|--------|-------------------------------------|
+| `ext_mlx_eval_dataset_uri`      | string | Evaluation dataset URI              |
+| `ext_mlx_eval_model_uri`        | string | Model to evaluate                   |
+| `ext_mlx_eval_metrics`          | array  | Metrics to compute                  |
+| `ext_mlx_eval_thresholds`       | object | Min/max thresholds per metric       |
+| `ext_mlx_eval_output_uri`       | string | Results output URI                  |
+| `ext_mlx_eval_baseline_run_id`  | string | Baseline run for comparison         |
+
+Well-known metrics: `accuracy`, `f1`, `precision`, `recall`, `auc_roc`, `loss`, `perplexity`, `bleu`, `rouge_l`, `mae`, `rmse`, `latency_p50`, `latency_p99`, `throughput`.
+
+## Artifact Management
+
+Unified artifact references for models, datasets, and checkpoints.
+
+| Attribute                     | Type   | Description                        |
+|-------------------------------|--------|------------------------------------|
+| `ext_mlx_artifact_model_uri`  | string | Primary model artifact URI         |
+| `ext_mlx_artifact_dataset_uri`| string | Primary dataset URI                |
+| `ext_mlx_artifact_checkpoint_uri` | string | Checkpoint artifact URI        |
+| `ext_mlx_artifact_output_uri` | string | Primary output artifact URI        |
+| `ext_mlx_artifact_registry`   | string | `s3`, `gcs`, `azure_blob`, `mlflow`, `wandb`, `huggingface`, `local` |
+
+Supported URI schemes: `s3://`, `gs://`, `az://`, `hdfs://`, `mlflow://`, `wandb://`, `hf://`, `file://`.
+
+## Scheduling Hints
+
+Advisory attributes for optimizing job placement.
+
+| Attribute                             | Type   | Description                        |
+|---------------------------------------|--------|------------------------------------|
+| `ext_mlx_scheduling_gpu_affinity`     | string | `spread`, `pack`, `dedicated`      |
+| `ext_mlx_scheduling_preemption_policy`| string | `never`, `save_and_retry`, `immediate` |
+| `ext_mlx_scheduling_spot_preference`  | string | `spot_preferred`, `on_demand_only`, `any` |
+| `ext_mlx_scheduling_data_locality`    | string | URI hint for data-local scheduling |
+
+## Pipeline Example
+
+A complete ML pipeline expressed as an OJS workflow chain:
+
+```json
+{
+  "workflow_type": "chain",
+  "id": "019539a4-ml-pipeline-001",
+  "name": "classifier-training-pipeline",
+  "steps": [
+    {
+      "type": "ml.preprocess",
+      "queue": "cpu-workers",
+      "ext_ml_accelerator": "cpu",
+      "ext_mlx_preprocess_input_uri": "s3://raw/tickets.jsonl",
+      "ext_mlx_preprocess_output_uri": "s3://processed/tickets-v3/"
+    },
+    {
+      "type": "ml.train",
+      "queue": "gpu-training",
+      "ext_ml_gpu_type": "nvidia-a100",
+      "ext_ml_gpu_count": 4,
+      "ext_mlx_training_dataset_uri": "s3://processed/tickets-v3/train.parquet",
+      "ext_mlx_training_output_model_uri": "s3://models/v1.0.0/"
+    },
+    {
+      "type": "ml.evaluate",
+      "queue": "gpu-inference",
+      "ext_ml_gpu_count": 1,
+      "ext_mlx_eval_model_uri": "s3://models/v1.0.0/",
+      "ext_mlx_eval_thresholds": { "accuracy": { "min": 0.92 } }
+    },
+    {
+      "type": "ml.deploy",
+      "queue": "deployment",
+      "ext_ml_accelerator": "cpu"
+    }
+  ]
+}
+```
+
+Each step has independent resource requirements — the backend schedules each on appropriate hardware as the chain progresses. If evaluation thresholds are not met, the pipeline stops before deployment.

@@ -1,0 +1,197 @@
+---
+title: "Distributed Tracing"
+description: "End-to-end distributed tracing across OJS clients, backends, and workers"
+---
+
+OJS defines standardized distributed tracing conventions that enable end-to-end visibility across the full job lifecycle — from SDK client through backend to worker — even across languages and services.
+
+This specification extends the [Observability](/spec/observability) spec with detailed requirements for span naming, attributes, context propagation, and error recording.
+
+## Span Naming Conventions
+
+All OJS spans follow the pattern `{queue} {operation}` for client-facing operations (per OTel messaging conventions) and `ojs.{operation}` for system operations.
+
+### Client and Worker Spans
+
+| Operation | Span Name | Span Kind |
+|-----------|-----------|-----------|
+| Enqueue | `{queue} enqueue` | `PRODUCER` |
+| Batch enqueue | `{queue} enqueue_batch` | `PRODUCER` |
+| Fetch | `{queue} fetch` | `CONSUMER` |
+| Process | `{queue} process` | `CONSUMER` |
+| Ack | `ojs.ack` | `CLIENT` |
+| Nack | `ojs.nack` | `CLIENT` |
+| Cancel | `ojs.cancel` | `CLIENT` |
+
+### Backend System Spans
+
+| Operation | Span Name | Span Kind |
+|-----------|-----------|-----------|
+| Scheduler poll | `ojs.scheduler.poll` | `INTERNAL` |
+| Cron trigger | `ojs.cron.trigger` | `INTERNAL` |
+| Dead worker reap | `ojs.reaper.check` | `INTERNAL` |
+| Workflow advance | `ojs.workflow.advance` | `INTERNAL` |
+| Retry evaluation | `ojs.retry.evaluate` | `INTERNAL` |
+
+## Required Span Attributes
+
+### Core Attributes (Required)
+
+Every OJS span MUST include:
+
+| Attribute | Type | Example |
+|-----------|------|---------|
+| `messaging.system` | string | `"ojs"` |
+| `ojs.job.id` | string | `"019503e1-7b2a-..."` |
+| `ojs.job.type` | string | `"email.send"` |
+| `ojs.job.queue` | string | `"email"` |
+
+### Execution Attributes (Recommended)
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `ojs.job.attempt` | int | Current attempt number (1-indexed) |
+| `ojs.job.state` | string | Job state after the operation |
+| `ojs.worker.id` | string | Worker identifier |
+
+### Workflow Attributes (Conditional)
+
+Required when the job is part of a workflow:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `ojs.workflow.id` | string | Workflow identifier |
+| `ojs.workflow.type` | string | `chain`, `group`, or `batch` |
+| `ojs.workflow.step` | int | Current step (0-indexed) |
+
+### Backend Attributes (Recommended)
+
+| Attribute | Type | Values |
+|-----------|------|--------|
+| `ojs.backend.type` | string | `redis`, `postgres`, `nats`, `kafka`, `sqs`, `lite` |
+| `ojs.backend.version` | string | Implementation version |
+
+## Context Propagation
+
+OJS uses **W3C Trace Context** propagated through the job `meta` field to enable end-to-end tracing:
+
+```json
+{
+  "type": "email.send",
+  "args": [{"to": "user@example.com"}],
+  "meta": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    "tracestate": "ojs=p:8;r:62"
+  }
+}
+```
+
+### Injection (Client)
+
+When enqueuing a job, the SDK injects the current trace context into `meta.traceparent`.
+
+### Extraction (Worker)
+
+When processing a job, the SDK extracts the trace context from `meta.traceparent` and creates a **span link** (not a parent-child relationship) to the enqueue span.
+
+:::note
+Span links are used instead of parent-child because enqueue and process may be hours apart. Parent-child would create artificially long traces that break visualization tools.
+:::
+
+### Workflow Propagation
+
+For workflow jobs, each step carries both the previous step's trace context and the original workflow initiator's context:
+
+```json
+{
+  "meta": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-a1b2c3d4e5f60718-01",
+    "ojs.workflow.trace_origin": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  }
+}
+```
+
+## Span Hierarchy
+
+A complete OJS trace flows across three components:
+
+```
+Service A (HTTP handler)
+  └─ POST /api/signup (SERVER)
+      └─ email enqueue (PRODUCER)
+          │ injects meta.traceparent
+          └─ HTTP POST to OJS backend
+
+OJS Backend
+  └─ ojs.enqueue (SERVER)
+      └─ store job
+
+          ... time passes ...
+
+Worker B
+  └─ email process (CONSUMER)
+      │ link → enqueue PRODUCER span
+      ├─ user handler logic
+      └─ ojs.ack (CLIENT)
+```
+
+## Error Recording
+
+### Status Mapping
+
+| Outcome | Status Code |
+|---------|-------------|
+| Job completed | `OK` |
+| Job failed (retryable) | `ERROR` |
+| Job failed (discarded) | `ERROR` |
+| Job cancelled | `OK` |
+| Enqueue succeeded | `OK` |
+| Enqueue failed | `ERROR` |
+| Fetch timeout (no jobs) | `OK` |
+
+On failure, spans record an error event via the OTel `RecordError` API with `exception.type`, `exception.message`, and optionally `exception.stacktrace`.
+
+## Baggage Propagation
+
+OJS supports **W3C Baggage** for passing cross-service context:
+
+```json
+{
+  "meta": {
+    "traceparent": "00-...-01",
+    "baggage": "userId=12345,tenantId=acme"
+  }
+}
+```
+
+Reserved OJS baggage keys: `ojs.priority.override`, `ojs.trace.sample_rate`, `ojs.tenant.id`.
+
+## Metric Naming Conventions
+
+All metrics use the `ojs.` prefix with OTel semantic conventions:
+
+| Metric | Type | Unit | Description |
+|--------|------|------|-------------|
+| `ojs.job.enqueued` | Counter | `{job}` | Total jobs enqueued |
+| `ojs.job.completed` | Counter | `{job}` | Jobs completed successfully |
+| `ojs.job.failed` | Counter | `{job}` | Jobs that failed |
+| `ojs.job.duration` | Histogram | `s` | Processing duration |
+| `ojs.job.queue_time` | Histogram | `s` | Time from enqueue to process |
+| `ojs.queue.depth` | Gauge | `{job}` | Current jobs per queue/state |
+
+## Conformance
+
+| Requirement | Level |
+|-------------|-------|
+| Inject/extract W3C traceparent via job meta | Required |
+| Standard span naming (`{queue} {operation}`) | Required |
+| Required span attributes on all spans | Required |
+| Error recording with RecordError | Required |
+| Workflow attributes when applicable | Required |
+| Baggage propagation | Recommended |
+| Backend system spans | Recommended |
+
+## See Also
+
+- [Observability](/spec/observability) — Metrics, logging, and health check conventions
+- [OJS Distributed Tracing spec](https://github.com/openjobspec/openjobspec/blob/main/spec/spec/ojs-distributed-tracing.md) — Full normative specification
