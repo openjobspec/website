@@ -1,0 +1,64 @@
+---
+title: Security Policy
+description: How to report vulnerabilities, response timelines, and coordinated disclosure process.
+---
+
+This page covers vulnerability reporting for the OJS project. For the specification's security model (transport, authentication, authorization, input validation), see the [Security spec](/spec/security/).
+
+## Supported versions
+
+| Version | Supported |
+|---------|-----------|
+| 1.0.x   | ✅ Yes    |
+| < 1.0   | ❌ No     |
+
+## Reporting a vulnerability
+
+**Do NOT open public GitHub issues for security vulnerabilities.**
+
+If you discover a security vulnerability in any repository under the `openjobspec` organization, report it by emailing:
+
+📧 **[security@openjobspec.org](mailto:security@openjobspec.org)**
+
+### What to include
+
+- Description of the vulnerability
+- Steps to reproduce the issue
+- Affected repository and version
+- Potential impact assessment
+- Any suggested fixes (if applicable)
+
+### Response timeline
+
+| Stage | Timeline |
+|-------|----------|
+| **Acknowledgment** | Within 48 hours of your report |
+| **Initial assessment** | Within 7 days |
+| **Fix release** | Within 30 days of confirmation |
+
+### Coordinated disclosure process
+
+1. Reporter submits vulnerability privately via email
+2. We acknowledge receipt and begin investigation
+3. We develop and test a fix
+4. We release the fix and publish a security advisory
+5. Reporter is credited (unless they prefer anonymity)
+
+We ask that you allow up to **90 days** from initial report before public disclosure, to give us time to develop and release a proper fix.
+
+### Scope
+
+This security policy applies to all repositories under the [openjobspec](https://github.com/openjobspec) GitHub organization, including:
+
+- All backend implementations
+- All SDKs and contrib packages
+- The specification itself
+- CLI, Admin UI, Playground, and Kubernetes Operator
+
+### Credit
+
+We believe in recognizing the efforts of security researchers. With your permission, we will acknowledge your contribution in the security advisory and release notes.
+
+## Security best practices for implementers
+
+If you are implementing an OJS-compliant backend or SDK, review the [Security spec](/spec/security/) and [Encryption spec](/spec/encryption/) for requirements on transport security, authentication, authorization, and input validation.

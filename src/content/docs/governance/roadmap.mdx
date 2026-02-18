@@ -1,0 +1,59 @@
+---
+title: Roadmap
+description: Planned direction for Open Job Spec — current status, upcoming milestones, and future directions.
+---
+
+This document outlines the planned direction for Open Job Spec. It is a living document updated as priorities evolve based on community feedback and adoption patterns.
+
+## Current status
+
+OJS is in **release candidate** stage (v1.0.0-rc.1). The core specification, 5 reference backends, 6 SDKs, CLI, Admin UI, and Playground are feature-complete and passing all conformance levels.
+
+## v0.1.0 — First public release
+
+**Goal:** Cut the first tagged release across all packages to enable adoption.
+
+- Tag and publish all 12 packages (backends, SDKs, CLI)
+- Publish SDKs to package registries (npm, PyPI, Maven Central, crates.io, RubyGems)
+- Publish container images for all backends
+- Finalize and publish the v1.0 specification
+
+## v0.2.0 — Production hardening
+
+**Goal:** Address feedback from early adopters and improve operational maturity.
+
+- Extract shared Go backend code into `ojs-go-common` module
+- Add OpenTelemetry distributed tracing to all backends
+- Add authentication middleware to Redis/NATS/Kafka/SQS backends (parity with Postgres)
+- Cross-SDK integration tests (Go producer → JS consumer interop)
+- gRPC conformance test runner (currently HTTP-only)
+- Performance benchmarking suite with published results
+
+## v0.3.0 — Ecosystem expansion
+
+**Goal:** Expand integrations and lower the barrier to adoption.
+
+- Terraform provider for deploying OJS clusters
+- AMQP conformance test runner
+- CloudEvents bridge (bidirectional job ↔ event mapping)
+- Framework contrib packages stabilized (v1.0)
+- Migration guides from Sidekiq, BullMQ, Celery (CLI + docs)
+- Kubernetes operator stabilized (beta)
+
+## Future directions
+
+These are areas we are exploring but have not committed to timelines:
+
+- **WASM SDK** — Browser-native OJS client for edge/serverless use cases
+- **AI/ML job extensions** — GPU affinity, model versioning, resource requirements
+- **Multi-region federation** — Cross-datacenter job routing and replication
+- **Serverless adapters** — AWS Lambda, CloudFlare Workers, Vercel Edge Functions
+- **Real-time chat community** — Discord or Slack for synchronous collaboration
+
+## How to influence the roadmap
+
+- **Vote on issues**: Use 👍 reactions on [GitHub Issues](https://github.com/openjobspec/openjobspec/issues)
+- **Propose features**: Open a [Feature Request](https://github.com/openjobspec/openjobspec/issues/new?template=feature_request.yml)
+- **Propose spec changes**: Follow the [RFC process](/governance/rfc-process/)
+- **Discuss ideas**: Join [GitHub Discussions](https://github.com/openjobspec/spec/discussions)
+- **Contribute code**: See the [Contributing guide](/governance/contributing/)

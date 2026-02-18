@@ -170,6 +170,12 @@ export default defineConfig({
               label: 'Architecture Decisions',
               slug: 'governance/adrs',
             },
+            { label: 'Roadmap', slug: 'governance/roadmap' },
+            {
+              label: 'Security Policy',
+              slug: 'governance/security',
+            },
+            { label: 'Changelog', slug: 'governance/changelog' },
           ],
         },
       ],
