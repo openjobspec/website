@@ -119,6 +119,10 @@ export default defineConfig({
             },
             { label: 'Implement an SDK', slug: 'guides/implement-an-sdk' },
             {
+              label: 'Deployment Guide',
+              slug: 'guides/deployment',
+            },
+            {
               label: 'Migrate from Sidekiq',
               slug: 'guides/migrate-from-sidekiq',
             },

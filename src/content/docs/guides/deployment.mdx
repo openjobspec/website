@@ -1,0 +1,285 @@
+---
+title: Deployment Guide
+description: Production deployment with Helm, Terraform, Kubernetes manifests, and Grafana monitoring.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide covers production deployment of OJS backends using the infrastructure templates in the [`deploy/`](https://github.com/openjobspec/openjobspec/tree/main/deploy) directory. Four deployment methods are available: Helm charts, Terraform modules, raw Kubernetes manifests, and Docker Compose with monitoring.
+
+## Deployment options at a glance
+
+| Method | Best for | Prerequisites |
+|--------|----------|---------------|
+| **Helm** | Kubernetes-native teams | Kubernetes 1.26+, Helm 3 |
+| **Terraform** | Multi-cloud IaC | Terraform 1.5+, cloud provider account |
+| **Kubernetes manifests** | Simple K8s deployments, Kustomize users | Kubernetes 1.26+ |
+| **Docker Compose** | Local dev, single-server deployments | Docker, Docker Compose |
+
+---
+
+## Helm
+
+The Helm chart deploys an OJS server with its backing store (Redis, PostgreSQL, or NATS) and optional monitoring.
+
+### Quick start
+
+```bash
+helm repo add openjobspec https://charts.openjobspec.org
+helm repo update
+
+# Install with Redis backend (default)
+helm install ojs openjobspec/ojs-server
+
+# Install with PostgreSQL backend
+helm install ojs openjobspec/ojs-server --set backend=postgres
+```
+
+### Configuration
+
+Key `values.yaml` overrides:
+
+```yaml
+# Backend selection
+backend: redis  # redis | postgres | nats
+
+# Server configuration
+replicaCount: 3
+image:
+  repository: ghcr.io/openjobspec/ojs-backend-redis
+  tag: latest
+
+# Resource limits
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+# Auto-scaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# Monitoring
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+
+# Network policy
+networkPolicy:
+  enabled: true
+
+# Redis (when backend=redis)
+redis:
+  enabled: true
+  architecture: standalone
+```
+
+### Production checklist
+
+- Enable `networkPolicy` to restrict traffic to OJS pods
+- Set resource requests and limits for predictable scheduling
+- Enable `serviceMonitor` if running Prometheus Operator
+- Use `PodDisruptionBudget` (included by default) for availability during upgrades
+
+---
+
+## Terraform
+
+Terraform modules provision OJS infrastructure on AWS, GCP, and Azure.
+
+<Tabs>
+<TabItem label="AWS (ECS)">
+
+Deploys OJS on ECS Fargate with ElastiCache Redis and an ALB.
+
+```hcl
+module "ojs" {
+  source = "github.com/openjobspec/openjobspec//deploy/terraform/aws"
+
+  cluster_name     = "ojs-production"
+  backend          = "redis"
+  instance_type    = "cache.r7g.large"
+  desired_count    = 3
+  cpu              = 1024
+  memory           = 2048
+
+  vpc_id           = var.vpc_id
+  subnet_ids       = var.private_subnet_ids
+  alb_subnet_ids   = var.public_subnet_ids
+}
+```
+
+**Resources created:** ECS cluster, Fargate service, ElastiCache Redis, ALB, security groups, CloudWatch log group.
+
+</TabItem>
+<TabItem label="GCP (Cloud Run)">
+
+Deploys OJS on Cloud Run with Memorystore Redis.
+
+```hcl
+module "ojs" {
+  source = "github.com/openjobspec/openjobspec//deploy/terraform/gcp"
+
+  project_id       = var.project_id
+  region           = "us-central1"
+  backend          = "redis"
+  redis_tier       = "STANDARD_HA"
+  redis_memory_gb  = 5
+  min_instances    = 1
+  max_instances    = 10
+}
+```
+
+**Resources created:** Cloud Run service, Memorystore Redis, VPC connector, IAM bindings.
+
+</TabItem>
+<TabItem label="Azure (Container Instances)">
+
+Deploys OJS on Azure Container Instances with Azure Cache for Redis.
+
+```hcl
+module "ojs" {
+  source = "github.com/openjobspec/openjobspec//deploy/terraform/azure"
+
+  resource_group_name = var.resource_group_name
+  location           = "eastus"
+  backend            = "redis"
+  redis_sku          = "Standard"
+  redis_family       = "C"
+  redis_capacity     = 2
+  cpu                = 2
+  memory             = 4
+}
+```
+
+**Resources created:** Container group, Azure Cache for Redis, virtual network, network security group.
+
+</TabItem>
+</Tabs>
+
+### Applying
+
+```bash
+cd deploy/terraform/aws   # or gcp, azure
+terraform init
+terraform plan
+terraform apply
+```
+
+---
+
+## Kubernetes manifests
+
+Raw Kubernetes manifests with Kustomize overlays for teams that prefer plain YAML over Helm.
+
+### Structure
+
+```
+deploy/kubernetes/
+├── base/
+│   ├── kustomization.yaml
+│   ├── namespace.yaml
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── configmap.yaml
+│   └── redis/
+├── overlays/
+│   ├── dev/
+│   │   └── kustomization.yaml
+│   └── production/
+│       ├── kustomization.yaml
+│       ├── hpa.yaml
+│       ├── pdb.yaml
+│       ├── networkpolicy.yaml
+│       └── monitoring/
+```
+
+### Deploy
+
+```bash
+# Development
+kubectl apply -k deploy/kubernetes/overlays/dev
+
+# Production
+kubectl apply -k deploy/kubernetes/overlays/production
+```
+
+### Production overlay includes
+
+- **HorizontalPodAutoscaler** — Scales based on CPU and custom metrics
+- **PodDisruptionBudget** — Ensures availability during node maintenance
+- **NetworkPolicy** — Restricts ingress/egress to required ports
+- **RBAC** — Least-privilege service account
+- **Security context** — Read-only filesystem, non-root user, dropped capabilities
+- **Prometheus annotations** — Scrape configuration for metrics collection
+
+---
+
+## Monitoring with Grafana
+
+The `deploy/grafana/` directory provides pre-built Grafana dashboards and Prometheus configuration for OJS observability.
+
+### Dashboards
+
+| Dashboard | What it shows |
+|-----------|--------------|
+| **OJS Overview** | Throughput (jobs/sec), latency (p50/p95/p99), queue depth, error rate |
+| **Queue Detail** | Per-queue depth, processing rate, wait time, dead letter count |
+| **Alerts** | Pre-configured alert rules for queue depth, error rate, and latency |
+
+### Prometheus metrics exposed
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `ojs_jobs_enqueued_total` | Counter | Total jobs enqueued |
+| `ojs_jobs_completed_total` | Counter | Total jobs completed |
+| `ojs_jobs_failed_total` | Counter | Total jobs failed |
+| `ojs_jobs_duration_seconds` | Histogram | Job execution duration |
+| `ojs_queue_depth` | Gauge | Current queue depth |
+| `ojs_queue_latency_seconds` | Histogram | Time from enqueue to start |
+| `ojs_workers_active` | Gauge | Active worker count |
+| `ojs_dead_letter_count` | Gauge | Dead letter queue size |
+| `ojs_scheduler_runs_total` | Counter | Scheduler loop executions |
+| `ojs_heartbeat_latency_seconds` | Histogram | Worker heartbeat latency |
+| `ojs_batch_size` | Histogram | Batch enqueue sizes |
+| `ojs_workflow_duration_seconds` | Histogram | Workflow execution duration |
+| `ojs_cron_triggers_total` | Counter | Cron job triggers |
+
+### Quick start with Docker Compose
+
+```bash
+cd deploy/grafana
+docker compose up -d
+```
+
+This starts Prometheus (scraping OJS metrics on `:8080/metrics`) and Grafana (available at `http://localhost:3000`) with dashboards pre-provisioned.
+
+### Manual setup
+
+1. Add the Prometheus scrape target:
+
+   ```yaml
+   # prometheus.yml
+   scrape_configs:
+     - job_name: ojs
+       static_configs:
+         - targets: ['ojs-server:8080']
+       metrics_path: /metrics
+   ```
+
+2. Import dashboards from `deploy/grafana/dashboards/` into your Grafana instance.
+
+---
+
+## Next steps
+
+- [Backends](/ecosystem/backends/) — Detailed backend architecture and configuration
+- [Kubernetes Operator](/ecosystem/tools/#kubernetes-operator) — Declarative cluster management with CRDs
+- [Observability spec](/spec/observability/) — Metrics, tracing, and logging specification
