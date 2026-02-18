@@ -1,0 +1,138 @@
+---
+title: Error Catalog
+description: Standardized OJS-XXXX numeric error codes for cross-SDK consistency, logging, and monitoring.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The OJS SDK Error Catalog assigns every error a stable **OJS-XXXX** numeric identifier for use across all six SDKs (Go, JS/TS, Python, Java, Rust, Ruby). These codes supplement the [canonical string error codes](/reference/error-codes/) used on the wire.
+
+<Aside type="tip">
+  Use OJS-XXXX codes in logs, dashboards, and alerts for unambiguous error identification across services.
+</Aside>
+
+## Error code format
+
+```
+OJS-XNNN
+```
+
+- **OJS-** — Fixed prefix
+- **X** — Category digit (1–7)
+- **NNN** — Sequential number within category
+
+## Categories
+
+| Range | Category | Default Retryable |
+|-------|----------|-------------------|
+| OJS-1xxx | Client errors (validation, serialization, connection) | No |
+| OJS-2xxx | Server / infrastructure errors | Yes |
+| OJS-3xxx | Job lifecycle errors | Varies |
+| OJS-4xxx | Workflow errors | Varies |
+| OJS-5xxx | Authentication & authorization | No |
+| OJS-6xxx | Rate limiting & backpressure | Yes |
+| OJS-7xxx | Extension errors | Varies |
+
+## OJS-1xxx: Client Errors
+
+| Code | Name | HTTP | Canonical Code | Retryable |
+|------|------|------|----------------|-----------|
+| OJS-1000 | InvalidPayload | 400 | `INVALID_PAYLOAD` | No |
+| OJS-1001 | InvalidJobType | 400 | `INVALID_JOB_TYPE` | No |
+| OJS-1002 | InvalidQueue | 400 | `INVALID_QUEUE` | No |
+| OJS-1003 | InvalidArgs | 400 | `INVALID_ARGS` | No |
+| OJS-1004 | InvalidMetadata | 400 | `INVALID_METADATA` | No |
+| OJS-1005 | InvalidStateTransition | 409 | `INVALID_STATE_TRANSITION` | No |
+| OJS-1006 | InvalidRetryPolicy | 400 | `INVALID_RETRY_POLICY` | No |
+| OJS-1007 | InvalidCronExpression | 400 | `INVALID_CRON_EXPRESSION` | No |
+| OJS-1008 | SchemaValidationFailed | 422 | `SCHEMA_VALIDATION_FAILED` | No |
+| OJS-1009 | PayloadTooLarge | 413 | `PAYLOAD_TOO_LARGE` | No |
+| OJS-1010 | MetadataTooLarge | 413 | `METADATA_TOO_LARGE` | No |
+| OJS-1011 | ConnectionError | — | *(client-side)* | Yes |
+| OJS-1012 | RequestTimeout | — | *(client-side)* | Yes |
+| OJS-1013 | SerializationError | — | *(client-side)* | No |
+| OJS-1014 | QueueNameTooLong | 400 | `QUEUE_NAME_TOO_LONG` | No |
+| OJS-1015 | JobTypeTooLong | 400 | `JOB_TYPE_TOO_LONG` | No |
+| OJS-1016 | ChecksumMismatch | 400 | `CHECKSUM_MISMATCH` | No |
+| OJS-1017 | UnsupportedCompression | 400 | `UNSUPPORTED_COMPRESSION` | No |
+
+## OJS-2xxx: Server Errors
+
+| Code | Name | HTTP | Canonical Code | Retryable |
+|------|------|------|----------------|-----------|
+| OJS-2000 | BackendError | 500 | `BACKEND_ERROR` | Yes |
+| OJS-2001 | BackendUnavailable | 503 | `BACKEND_UNAVAILABLE` | Yes |
+| OJS-2002 | BackendTimeout | 504 | `BACKEND_TIMEOUT` | Yes |
+| OJS-2003 | ReplicationLag | 500 | `REPLICATION_LAG` | Yes |
+| OJS-2004 | InternalServerError | 500 | *(generic)* | Yes |
+
+## OJS-3xxx: Job Lifecycle Errors
+
+| Code | Name | HTTP | Canonical Code | Retryable |
+|------|------|------|----------------|-----------|
+| OJS-3000 | JobNotFound | 404 | `NOT_FOUND` | No |
+| OJS-3001 | DuplicateJob | 409 | `DUPLICATE_JOB` | No |
+| OJS-3002 | JobAlreadyCompleted | 409 | `JOB_ALREADY_COMPLETED` | No |
+| OJS-3003 | JobAlreadyCancelled | 409 | `JOB_ALREADY_CANCELLED` | No |
+| OJS-3004 | QueuePaused | 422 | `QUEUE_PAUSED` | Yes |
+| OJS-3005 | HandlerError | — | `HANDLER_ERROR` | Per policy |
+| OJS-3006 | HandlerTimeout | — | `HANDLER_TIMEOUT` | Per policy |
+| OJS-3007 | HandlerPanic | — | `HANDLER_PANIC` | Per policy |
+| OJS-3008 | NonRetryableError | — | `NON_RETRYABLE_ERROR` | No |
+| OJS-3009 | JobCancelled | — | `JOB_CANCELLED` | No |
+| OJS-3010 | NoHandlerRegistered | — | *(client-side)* | No |
+
+## OJS-4xxx: Workflow Errors
+
+| Code | Name | HTTP | Retryable |
+|------|------|------|-----------|
+| OJS-4000 | WorkflowNotFound | 404 | No |
+| OJS-4001 | ChainStepFailed | 422 | No |
+| OJS-4002 | GroupTimeout | 504 | Yes |
+| OJS-4003 | DependencyFailed | 422 | No |
+| OJS-4004 | CyclicDependency | 400 | No |
+| OJS-4005 | BatchCallbackFailed | 422 | Per policy |
+| OJS-4006 | WorkflowCancelled | 409 | No |
+
+## OJS-5xxx: Authentication & Authorization Errors
+
+| Code | Name | HTTP | Canonical Code | Retryable |
+|------|------|------|----------------|-----------|
+| OJS-5000 | Unauthenticated | 401 | `UNAUTHENTICATED` | No |
+| OJS-5001 | PermissionDenied | 403 | `PERMISSION_DENIED` | No |
+| OJS-5002 | TokenExpired | 401 | `TOKEN_EXPIRED` | No |
+| OJS-5003 | TenantAccessDenied | 403 | `TENANT_ACCESS_DENIED` | No |
+
+## OJS-6xxx: Rate Limiting & Backpressure Errors
+
+| Code | Name | HTTP | Canonical Code | Retryable |
+|------|------|------|----------------|-----------|
+| OJS-6000 | RateLimited | 429 | `RATE_LIMITED` | Yes |
+| OJS-6001 | QueueFull | 429 | `QUEUE_FULL` | Yes |
+| OJS-6002 | ConcurrencyLimited | 429 | — | Yes |
+| OJS-6003 | BackpressureApplied | 429 | — | Yes |
+
+## OJS-7xxx: Extension Errors
+
+| Code | Name | HTTP | Canonical Code | Retryable |
+|------|------|------|----------------|-----------|
+| OJS-7000 | UnsupportedFeature | 422 | `UNSUPPORTED_FEATURE` | No |
+| OJS-7001 | CronScheduleConflict | 409 | — | No |
+| OJS-7002 | UniqueKeyInvalid | 400 | — | No |
+| OJS-7003 | MiddlewareError | 500 | — | Yes |
+| OJS-7004 | MiddlewareTimeout | 504 | — | Yes |
+
+## SDK availability
+
+Error code constants are available in all six SDKs:
+
+| SDK | Import |
+|-----|--------|
+| Go | `ojs.CodeDuplicateJob`, `ojs.LookupByCanonicalCode("DUPLICATE_JOB")` |
+| JS/TS | `import { OJS_3001_DUPLICATE_JOB, lookupByCanonicalCode } from '@openjobspec/sdk'` |
+| Python | `from ojs.error_codes import DUPLICATE_JOB, lookup_by_canonical_code` |
+| Java | `ErrorCode.DUPLICATE_JOB`, `ErrorCode.fromCanonicalCode("DUPLICATE_JOB")` |
+| Rust | `ojs::error_codes::OJS_3001_DUPLICATE_JOB`, `ojs::error_codes::lookup_by_canonical_code("DUPLICATE_JOB")` |
+| Ruby | `OJS::ErrorCodes::DUPLICATE_JOB`, `OJS::ErrorCodes.lookup_by_canonical_code("DUPLICATE_JOB")` |
+
+See the full specification at [`spec/ojs-error-catalog.md`](https://github.com/openjobspec/openjobspec/blob/main/spec/ojs-error-catalog.md).

@@ -1,0 +1,134 @@
+---
+title: "Benchmarks"
+description: "Performance benchmarks, methodology, and historical results for OJS backends"
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+OJS publishes reproducible performance benchmarks for all backends. Results are generated automatically in CI and tracked over time to detect regressions.
+
+## Latest Results
+
+Benchmark results are published on every push to `main` and on a weekly schedule (Sundays at 2am UTC).
+
+- **[Latest benchmark artifacts](https://github.com/openjobspec/openjobspec/actions/workflows/benchmarks.yml)** — download raw results and generated reports from the most recent workflow run
+- **[Historical trends](https://openjobspec.github.io/openjobspec/dev/bench/)** — interactive charts tracking performance over time (powered by [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark))
+
+## Operations Benchmarked
+
+| Operation | Description |
+|-----------|-------------|
+| **Enqueue** | Single job enqueue via HTTP POST |
+| **EnqueueBatch** | Batch enqueue (10, 50, 100 jobs) via HTTP POST |
+| **Fetch** | Single job fetch via HTTP POST |
+| **Ack** | Job acknowledgment after processing |
+| **RoundTrip** | Full lifecycle: enqueue → fetch → ack |
+| **ConcurrentEnqueue** | Parallel enqueue from N goroutines |
+
+## Metrics Collected
+
+| Metric | Description |
+|--------|-------------|
+| **ops/sec** | Operations per second (derived from ns/op) |
+| **ns/op** | Nanoseconds per operation |
+| **B/op** | Bytes allocated per operation |
+| **allocs/op** | Heap allocations per operation |
+
+## Backends Compared
+
+| Backend | Setup | Characteristics |
+|---------|-------|-----------------|
+| **Lite** | In-process | Zero dependencies, in-memory, baseline measurement |
+| **Redis** | Redis 7+ | Lua-scripted atomicity, production-grade |
+| **PostgreSQL** | PostgreSQL 16+ | SKIP LOCKED dequeue, LISTEN/NOTIFY, production-grade |
+| **Go SDK** | Client library | Measures SDK overhead separately from backend |
+
+## Methodology
+
+- **Runtime**: Ubuntu latest runners on GitHub Actions (consistent hardware)
+- **Go benchmark framework**: Standard `testing.B` with `-benchmem`
+- **Iterations**: `-count=5` for statistical significance
+- **Timer reset**: `b.ResetTimer()` after setup to exclude initialization
+- **Network overhead**: Included (HTTP round-trip) to reflect real-world usage
+- **Concurrency**: `b.RunParallel()` with `GOMAXPROCS` goroutines
+
+<Aside type="caution">
+  Benchmark results are machine-specific. Use relative comparisons between backends, not absolute numbers. CI runners may vary slightly between runs.
+</Aside>
+
+## Regression Detection
+
+The CI workflow automatically detects performance regressions:
+
+1. **Baseline caching**: After each `main` branch run, results are cached as the baseline for the next run
+2. **Threshold**: Any metric (ns/op, B/op, allocs/op) that worsens by more than **10%** is flagged
+3. **PR comments**: If regressions are detected on a pull request, a comment is posted with details
+4. **Trend alerts**: The [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark) action monitors for sustained degradation
+
+## Running Benchmarks Locally
+
+### Prerequisites
+
+- Go 1.22+
+- Docker (for Redis and PostgreSQL backends)
+
+### Quick Start
+
+```bash
+cd ojs-benchmarks
+
+# Run against the Lite backend (no dependencies needed)
+make bench-lite
+
+# Start infrastructure for other backends
+docker compose up -d
+
+# Run all backends
+make bench-all
+
+# Generate a comparison report (Markdown + JSON)
+make report
+
+# Generate a report with regression detection against a baseline
+make report-with-baseline
+```
+
+### Individual Backends
+
+```bash
+# Lite (in-process, no dependencies)
+make bench-lite
+
+# Redis (requires Redis on localhost:6379)
+make bench-redis
+
+# PostgreSQL (requires PostgreSQL on localhost:5432)
+make bench-postgres
+```
+
+### Report Output
+
+The `make report` command generates two files in `results/`:
+
+- **`RESULTS.md`** — Human-readable Markdown with summary tables and backend comparisons
+- **`benchmark-results.json`** — Machine-readable JSON for programmatic consumption
+
+The JSON report includes structured data for each benchmark result, cross-backend comparisons, and any detected regressions.
+
+### Custom Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `OJS_BENCH_URL` | `http://localhost:8080` | Target server URL |
+| `OJS_BENCH_API_KEY` | _(empty)_ | API key for authenticated endpoints |
+
+## CI Workflow
+
+The benchmark workflow (`.github/workflows/benchmarks.yml`) runs:
+
+- On every push to `main` that modifies backend or SDK code
+- On a weekly schedule (Sundays at 2am UTC)
+- On `workflow_dispatch` (manual trigger)
+- On pull requests that modify backend or SDK code
+
+Results are uploaded as artifacts with 90-day retention and published to the `benchmarks` branch for trend tracking.
