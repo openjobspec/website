@@ -372,3 +372,4 @@ When a job handler fails, the error is reported as a structured object (separate
 | `backtrace` | string[] | No | Stack trace frames (max 50 frames recommended) |
 
 The `type` field is used to match against `non_retryable_errors` in the retry policy. If a failing job's error type matches a non-retryable error, the job skips retry and moves directly to `discarded`.
+
