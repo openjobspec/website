@@ -50,6 +50,41 @@ worker.Handle("email.send", func(ctx ojs.JobContext) error {
 worker.Start(context.Background())
 ```
 
+## Try OJS in 60 seconds
+
+<div class="terminal-demo">
+  <div class="terminal-header">
+    <span class="terminal-dot red"></span>
+    <span class="terminal-dot yellow"></span>
+    <span class="terminal-dot green"></span>
+    <span class="terminal-title">Terminal</span>
+  </div>
+  <div class="terminal-body">
+
+```bash
+# 1. Start the server (zero dependencies)
+docker run -p 8080:8080 ghcr.io/openjobspec/ojs-lite:latest
+
+# 2. Enqueue a job
+curl -X POST http://localhost:8080/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type":"email.send","args":["user@example.com","welcome"]}'
+
+# → {"id":"01957abc-def0-7abc-...","state":"available"}
+
+# 3. Or use any SDK
+npm install @openjobspec/sdk
+```
+
+  </div>
+</div>
+
+<div class="try-buttons">
+  <a href="/getting-started/quickstart/" class="cta-primary">Quickstart Guide</a>
+  <a href="https://playground.openjobspec.org" class="cta-secondary">Try the Playground →</a>
+  <a href="https://github.com/openjobspec/openjobspec/blob/main/docker-compose.quickstart.yml" class="cta-secondary">Docker Compose →</a>
+</div>
+
 ---
 
 ## Why OJS?
@@ -86,10 +121,11 @@ Both official backends support all five conformance levels and are production-re
 ---
 
 <div class="cta-section">
-  <h2>Get running in 5 minutes</h2>
-  <p>One Docker Compose command, one SDK install, and you have a working job system.</p>
+  <h2>Get running in 60 seconds</h2>
+  <p>One Docker Compose command, one SDK install, and you have a working job system. Or try it instantly in the browser.</p>
   <div class="cta-buttons">
     <a href="/getting-started/quickstart/" class="cta-primary">Quickstart Guide</a>
+    <a href="https://playground.openjobspec.org" class="cta-primary">Try the Playground</a>
     <a href="/spec/core/" class="cta-secondary">Read the Spec</a>
   </div>
 </div>
