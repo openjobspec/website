@@ -13,7 +13,7 @@
     "@astrojs/starlight": "^0.34.0",
     "@astrojs/vercel": "^9.0.4",
     "astro": "^5.7.0",
-    "sharp": "^0.33.0"
+    "sharp": "^0.34.5"
   },
   "engines": {
     "node": ">=18.0.0"
