@@ -88,6 +88,13 @@ Every job progresses through exactly eight states. The state machine is enforced
 
 ### State Diagram
 
+<div style="max-width: 650px; margin: 2rem auto;">
+  <img src="/diagrams/lifecycle.svg" alt="OJS 8-State Job Lifecycle" width="650" height="600" />
+</div>
+
+<details>
+<summary>ASCII version</summary>
+
 ```
                                 ┌─────────────────────┐
                                 │       PUSH          │
@@ -124,6 +131,8 @@ Every job progresses through exactly eight states. The state machine is enforced
                                    │  available  │
                                    └─────────────┘
 ```
+
+</details>
 
 ### Valid State Transitions
 
