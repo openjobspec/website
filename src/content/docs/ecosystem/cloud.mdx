@@ -1,0 +1,135 @@
+---
+title: "OJS Cloud"
+description: "Managed Open Job Spec — zero ops, instant setup, free tier available."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<div style="text-align: center; margin: 2rem 0;">
+
+# Managed OJS Cloud
+
+**Background jobs without the infrastructure headaches.**
+
+Zero setup · Auto-scaling · Free tier · All backends
+
+</div>
+
+<Aside type="caution">
+  OJS Cloud is in **early access**. [Join the waitlist →](mailto:cloud@openjobspec.org)
+</Aside>
+
+## Why Managed?
+
+| Self-Hosted | OJS Cloud |
+|------------|-----------|
+| Provision Redis/Postgres/NATS yourself | One-click backend |
+| Configure TLS, auth, monitoring | Built-in |
+| Manage upgrades and patches | Automatic |
+| Scale workers manually | Auto-scaling |
+| Build dashboards | Pre-built |
+
+## Pricing
+
+| | Free | Starter | Pro | Enterprise |
+|---|:---:|:---:|:---:|:---:|
+| **Price** | $0/mo | $29/mo | $99/mo | $499/mo |
+| **Jobs/month** | 10,000 | 100,000 | 1,000,000 | 10,000,000 |
+| **Queues** | 5 | 20 | 100 | Unlimited |
+| **Workers** | 3 | 10 | 50 | Unlimited |
+| **Backend** | Lite | Redis | Redis/Postgres | All 6 |
+| **Retention** | 7 days | 30 days | 90 days | 1 year |
+| **SSE Events** | ✅ | ✅ | ✅ | ✅ |
+| **gRPC** | ❌ | ✅ | ✅ | ✅ |
+| **Workflows** | ❌ | ❌ | ✅ | ✅ |
+| **Encryption** | ❌ | ❌ | ✅ | ✅ |
+| **Federation** | ❌ | ❌ | ❌ | ✅ |
+| **SSO** | ❌ | ❌ | ❌ | ✅ |
+| **SLA** | — | 99.5% | 99.9% | 99.99% |
+| **Support** | Community | Email | Priority | Dedicated |
+
+All plans include: API key auth, Prometheus metrics, Admin UI, CLI access.
+
+## How It Works
+
+```
+1. Sign up at ojs.cloud (Google or GitHub SSO)
+     ↓
+2. Choose a backend (Redis recommended for most use cases)
+     ↓
+3. Get your API key and server URL
+     ↓
+4. Install any SDK:
+   npm install @openjobspec/sdk
+   pip install openjobspec
+   go get github.com/openjobspec/ojs-go-sdk
+     ↓
+5. Start processing jobs:
+   const client = new OJSClient({ url: 'https://YOUR-ID.ojs.cloud' });
+   await client.enqueue('email.send', { to: 'user@example.com' });
+```
+
+## Features
+
+### Multi-Tenant Isolation
+
+Each tenant gets:
+- Dedicated API keys with RBAC (admin/operator/developer/viewer)
+- Isolated queues and workers
+- Per-tenant rate limiting and metering
+- Audit logging
+
+### Observability Built-In
+
+- **Prometheus metrics** — scrape from your existing monitoring
+- **Admin UI** — visual job management at `your-id.ojs.cloud/admin`
+- **Usage dashboard** — jobs processed, error rates, queue depths
+- **Billing portal** — invoices, usage history, plan management
+
+### Security
+
+- API key authentication (required, no insecure mode)
+- TLS everywhere
+- OIDC/SAML SSO (Enterprise plan)
+- AES-256-GCM job payload encryption (Pro+ plans)
+- SOC 2 Type II (planned)
+
+## Self-Hosted vs Cloud
+
+| Consideration | Self-Hosted | Cloud |
+|--------------|:-----------:|:-----:|
+| Time to first job | 5 minutes | 60 seconds |
+| Infrastructure management | You | Us |
+| Backend choice | All 6 | Tier-dependent |
+| Customization | Full | API-level |
+| Data location | Your servers | AWS (us-east-1) |
+| Cost at 100K jobs/mo | ~$50 (infra) | $29 |
+| Cost at 10M jobs/mo | ~$500 (infra) | $499 |
+
+<Aside type="tip">
+  **Recommendation:** Start with the free tier to evaluate. Migrate to self-hosted if you need full control or data locality requirements.
+</Aside>
+
+## FAQ
+
+**Can I migrate from Cloud to self-hosted?**
+Yes. OJS Cloud uses the same API as self-hosted backends. Change the URL in your SDK config and you're done. No data migration needed for new jobs.
+
+**What happens if I exceed my plan limits?**
+Jobs are rate-limited, not dropped. Upgrade your plan or wait for the next billing cycle.
+
+**Is there a trial for paid plans?**
+The free tier is permanent — no credit card required, no expiration. For Pro/Enterprise evaluation, contact sales@openjobspec.org.
+
+**Where is data stored?**
+AWS us-east-1 (N. Virginia). EU and APAC regions are on the roadmap for Enterprise plans.
+
+---
+
+<div style="text-align: center; margin: 3rem 0;">
+
+**Ready to try OJS Cloud?**
+
+[Join the Waitlist →](mailto:cloud@openjobspec.org) · [Self-Hosted Quickstart →](/getting-started/quickstart)
+
+</div>
