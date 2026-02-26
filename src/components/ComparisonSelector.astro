@@ -1,0 +1,301 @@
+---
+/**
+ * ComparisonSelector — Interactive "OJS vs X" comparison widget.
+ *
+ * Renders a selector where users pick their current framework,
+ * then see a personalized comparison with migration code diffs.
+ */
+
+interface Props {
+  class?: string;
+}
+
+const competitors = [
+  { id: 'sidekiq', name: 'Sidekiq', lang: 'Ruby', backend: 'Redis' },
+  { id: 'bullmq', name: 'BullMQ', lang: 'TypeScript', backend: 'Redis' },
+  { id: 'celery', name: 'Celery', lang: 'Python', backend: 'Redis/RabbitMQ' },
+  { id: 'temporal', name: 'Temporal', lang: 'Multi', backend: 'Cassandra/MySQL' },
+];
+
+const comparisons: Record<string, {
+  advantages: string[];
+  migration: { before: string; after: string; lang: string };
+  effort: string;
+}> = {
+  sidekiq: {
+    advantages: [
+      '7 languages vs Ruby only',
+      '6 backends vs Redis only',
+      'Formal spec with 175 conformance tests',
+      'Contract testing for schema safety',
+      'No license restrictions (Apache 2.0 vs LGPL)',
+    ],
+    migration: {
+      lang: 'ruby',
+      before: `class EmailWorker
+  include Sidekiq::Worker
+  sidekiq_options queue: :mailer, retry: 5
+
+  def perform(to, subject)
+    UserMailer.send(to, subject)
+  end
+end`,
+      after: `# With OJS Ruby SDK
+worker.register('email.send') do |ctx|
+  to = ctx.args['to']
+  subject = ctx.args['subject']
+  UserMailer.send(to, subject)
+end`,
+    },
+    effort: '1-2 days for simple jobs, 1-2 weeks for complex setups',
+  },
+  bullmq: {
+    advantages: [
+      '7 languages vs TypeScript only',
+      '6 backends vs Redis only',
+      'Durable execution with deterministic replay',
+      'Built-in policy engine for governance',
+      'Geo-aware federation for multi-region',
+    ],
+    migration: {
+      lang: 'typescript',
+      before: `const queue = new Queue('email');
+await queue.add('send', { to, subject });
+
+const worker = new Worker('email', async (job) => {
+  await sendEmail(job.data.to, job.data.subject);
+});`,
+      after: `const client = new OJSClient({ url: 'http://localhost:8080' });
+await client.enqueue('email.send', { to, subject });
+
+const worker = new OJSWorker({ url: 'http://localhost:8080' });
+worker.register('email.send', async (ctx) => {
+  await sendEmail(ctx.job.args.to, ctx.job.args.subject);
+});`,
+    },
+    effort: '1-2 days for simple jobs, 1-2 weeks for complex setups',
+  },
+  celery: {
+    advantages: [
+      '7 languages vs Python only',
+      '6 backends (incl. SQS, NATS, Kafka)',
+      'Formal specification with conformance testing',
+      'Auto-tuning with anomaly detection',
+      'AI/ML job extensions (GPU affinity)',
+    ],
+    migration: {
+      lang: 'python',
+      before: `@app.task(queue='email', max_retries=5)
+def send_email(to, subject):
+    mailer.send(to, subject)
+
+# Enqueue
+send_email.delay('user@example.com', 'Welcome')`,
+      after: `@worker.register('email.send')
+async def handle_email(ctx):
+    to = ctx.args['to']
+    subject = ctx.args['subject']
+    await mailer.send(to, subject)
+
+# Enqueue
+await client.enqueue('email.send', {'to': 'user@example.com', 'subject': 'Welcome'})`,
+    },
+    effort: '1-2 days for simple tasks, 2-4 weeks for complex Celery setups',
+  },
+  temporal: {
+    advantages: [
+      'Simpler ops (1 binary + 1 datastore vs 4+ services)',
+      '6 backend choices vs Cassandra/MySQL only',
+      'Lower learning curve (job queue model vs deterministic replay)',
+      'Free pricing vs $200/mo Temporal Cloud minimum',
+      'Open standard vs proprietary protocol',
+    ],
+    migration: {
+      lang: 'go',
+      before: `// Temporal: separate workflow + activity
+func SendEmailWorkflow(ctx workflow.Context, to string) error {
+    ao := workflow.ActivityOptions{
+        StartToCloseTimeout: 10 * time.Minute,
+    }
+    ctx = workflow.WithActivityOptions(ctx, ao)
+    return workflow.ExecuteActivity(ctx, SendEmailActivity, to).Get(ctx, nil)
+}
+
+func SendEmailActivity(ctx context.Context, to string) error {
+    return sendEmail(to)
+}`,
+      after: `// OJS: single handler, same reliability
+worker.Register("email.send", func(ctx ojs.JobContext) error {
+    to := ctx.Job.Args["to"].(string)
+    return sendEmail(to)
+})`,
+    },
+    effort: '3-5 days for activity-only workflows, 2+ weeks for complex sagas',
+  },
+};
+---
+
+<div class:list={['comparison-selector', Astro.props.class]}>
+  <div class="selector-grid">
+    <p class="selector-label"><strong>I'm currently using:</strong></p>
+    <div class="button-group" id="comp-buttons">
+      {competitors.map(c => (
+        <button
+          class="comp-btn"
+          data-competitor={c.id}
+          data-name={c.name}
+          data-lang={c.lang}
+          data-backend={c.backend}
+        >
+          {c.name}
+          <span class="comp-meta">{c.lang} · {c.backend}</span>
+        </button>
+      ))}
+    </div>
+  </div>
+
+  {Object.entries(comparisons).map(([id, data]) => (
+    <div class="comparison-result" id={`result-${id}`} style="display: none;">
+      <h3>OJS vs {competitors.find(c => c.id === id)?.name}</h3>
+
+      <h4>Why switch?</h4>
+      <ul>
+        {data.advantages.map(a => <li>{a}</li>)}
+      </ul>
+
+      <h4>Code migration</h4>
+      <div class="code-diff">
+        <div class="code-before">
+          <div class="code-label">Before ({competitors.find(c => c.id === id)?.name})</div>
+          <pre><code>{data.migration.before}</code></pre>
+        </div>
+        <div class="code-after">
+          <div class="code-label">After (OJS)</div>
+          <pre><code>{data.migration.after}</code></pre>
+        </div>
+      </div>
+
+      <h4>Migration effort</h4>
+      <p>{data.effort}</p>
+
+      <p>
+        <a href="/getting-started/quickstart" class="cta-link">→ Try OJS in 60 seconds</a>
+        {' · '}
+        <a href="/getting-started/migration-calculator" class="cta-link">→ Migration calculator</a>
+      </p>
+    </div>
+  ))}
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const buttons = document.querySelectorAll('.comp-btn');
+    const results = document.querySelectorAll('.comparison-result');
+
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-competitor');
+
+        buttons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        results.forEach(r => {
+          (r as HTMLElement).style.display = r.id === `result-${id}` ? 'block' : 'none';
+        });
+      });
+    });
+  });
+</script>
+
+<style>
+  .comparison-selector {
+    margin: 2rem 0;
+  }
+
+  .selector-label {
+    margin-bottom: 0.75rem;
+    font-size: 1.1rem;
+  }
+
+  .button-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .comp-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.75rem 1.25rem;
+    border: 2px solid var(--sl-color-gray-5, #ddd);
+    border-radius: 8px;
+    background: var(--sl-color-bg-nav, #fff);
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    transition: all 0.2s;
+    min-width: 140px;
+  }
+
+  .comp-btn:hover {
+    border-color: var(--sl-color-accent, #6366f1);
+    background: var(--sl-color-accent-low, #eef2ff);
+  }
+
+  .comp-btn.active {
+    border-color: var(--sl-color-accent, #6366f1);
+    background: var(--sl-color-accent-low, #eef2ff);
+    box-shadow: 0 0 0 2px var(--sl-color-accent, #6366f1);
+  }
+
+  .comp-meta {
+    font-size: 0.75rem;
+    font-weight: 400;
+    opacity: 0.7;
+    margin-top: 0.25rem;
+  }
+
+  .comparison-result {
+    border: 1px solid var(--sl-color-gray-5, #ddd);
+    border-radius: 8px;
+    padding: 1.5rem;
+    background: var(--sl-color-bg-nav, #fff);
+  }
+
+  .code-diff {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+
+  @media (max-width: 768px) {
+    .code-diff { grid-template-columns: 1fr; }
+  }
+
+  .code-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .code-before .code-label { color: #e11d48; }
+  .code-after .code-label { color: #16a34a; }
+
+  .code-diff pre {
+    font-size: 0.8rem;
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 0;
+  }
+
+  .cta-link {
+    font-weight: 600;
+    color: var(--sl-color-accent, #6366f1);
+  }
+</style>
