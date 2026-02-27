@@ -1,0 +1,92 @@
+---
+title: "OJS Academy"
+description: "Learn background job processing with Open Job Spec — from your first job to production deployment."
+---
+
+Welcome to the **OJS Academy** — a structured learning path that takes you from zero to production with Open Job Spec.
+
+## Learning Path
+
+### Part 1: Your First Job
+
+Get a working job system running in 5 minutes. Choose your language:
+
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+| Language | Tutorial |
+|----------|----------|
+| 🟦 **Go** | [Your First Job in Go](/tutorials/your-first-job-go) |
+| 🟨 **TypeScript** | [Your First Job in TypeScript](/tutorials/your-first-job-typescript) |
+| 🐍 **Python** | [Your First Job in Python](/tutorials/your-first-job-python) |
+| ☕ **Java** | [Your First Job in Java](/tutorials/your-first-job-java) |
+| 🦀 **Rust** | [Your First Job in Rust](/tutorials/your-first-job-rust) |
+| 💎 **Ruby** | [Your First Job in Ruby](/tutorials/your-first-job-ruby) |
+
+</div>
+
+**What you'll learn:** Install SDK → Start backend → Enqueue a job → Process it → See results
+
+---
+
+### Part 2: Workflows & Scheduling
+
+Build real-world patterns: job chains, parallel fan-out, cron scheduling, and retry strategies.
+
+→ [Workflow Patterns Tutorial](/tutorials/workflow-patterns)
+
+**What you'll learn:** Chain (sequential) → Group (parallel) → Batch (callbacks) → Cron → Retry policies → Priority queues
+
+---
+
+### Part 3: Migrating from Other Frameworks
+
+Step-by-step migration from your current job framework to OJS.
+
+| From | Guide |
+|------|-------|
+| Sidekiq (Ruby) | [Migrating from Sidekiq](/getting-started/migration-calculator) |
+| BullMQ (Node) | [Migrating from BullMQ](/getting-started/migration-calculator) |
+| Celery (Python) | [Migrating from Celery](/getting-started/migration-calculator) |
+
+**What you'll learn:** Map job types → Convert workers → Switch backends → Validate with conformance tests
+
+---
+
+### Part 4: Observability & Debugging
+
+Monitor, debug, and optimize your OJS deployment.
+
+**Topics covered:**
+- Setting up Prometheus + Grafana dashboards
+- OpenTelemetry distributed tracing
+- Using the Admin UI
+- CLI debugging commands (`ojs debug`, `ojs monitor`)
+- Auto-tuning recommendations
+
+---
+
+### Part 5: Production Deployment
+
+Deploy OJS to production with confidence.
+
+→ [Production Deployment Guide](/tutorials/production-deployment)
+
+**Topics covered:**
+- Choosing the right backend
+- Kubernetes deployment with Helm
+- Security hardening (auth, encryption, policy engine)
+- High availability and failover
+- Performance tuning
+
+---
+
+## Quick Reference
+
+| I want to... | Go here |
+|--------------|---------|
+| Try OJS in 60 seconds | [Quickstart](/getting-started/quickstart) |
+| Compare OJS to my current framework | [Feature Comparison](/getting-started/feature-comparison) |
+| Understand the architecture | [Architecture Guide](https://github.com/openjobspec/openjobspec/blob/main/ARCHITECTURE.md) |
+| Read the specification | [Core Spec](/spec/core) |
+| Run conformance tests | [Conformance Guide](https://github.com/openjobspec/ojs-conformance) |
+| Deploy to production | [Production Guide](/tutorials/production-deployment) |

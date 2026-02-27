@@ -4,10 +4,15 @@ description: See how OJS compares to existing job frameworks like Sidekiq, BullM
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import ComparisonSelector from '../../../components/ComparisonSelector.astro';
 
 Every job framework today — Sidekiq, BullMQ, Celery, Faktory — invents its own wire format, retry semantics, and lifecycle model. **Open Job Spec (OJS)** replaces that fragmentation with a single, well-specified standard.
 
 Think of it as [CloudEvents](https://cloudevents.io), but for background jobs.
+
+## What are you migrating from?
+
+<ComparisonSelector />
 
 ## At a glance
 
