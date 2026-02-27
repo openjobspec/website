@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 600" font-family="system-ui,-apple-system,sans-serif" font-size="12">
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/></marker></defs>
+  <line x1="300" y1="70" x2="300" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="310" y="110" text-anchor="middle" fill="#888" font-size="10">delay_expires</text>
+  <line x1="300" y1="70" x2="500" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="410" y="110" text-anchor="middle" fill="#888" font-size="10">CANCEL</text>
+  <line x1="300" y1="190" x2="300" y2="270" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="310" y="230" text-anchor="middle" fill="#888" font-size="10">FETCH</text>
+  <line x1="300" y1="190" x2="500" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="410" y="170" text-anchor="middle" fill="#888" font-size="10">CANCEL</text>
+  <line x1="100" y1="190" x2="300" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="210" y="170" text-anchor="middle" fill="#888" font-size="10">resolve</text>
+  <line x1="100" y1="190" x2="500" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="310" y="170" text-anchor="middle" fill="#888" font-size="10">CANCEL</text>
+  <line x1="300" y1="310" x2="100" y2="390" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="210" y="350" text-anchor="middle" fill="#888" font-size="10">ACK</text>
+  <line x1="300" y1="310" x2="500" y2="390" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="410" y="350" text-anchor="middle" fill="#888" font-size="10">FAIL (retryable)</text>
+  <line x1="300" y1="310" x2="300" y2="510" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="310" y="410" text-anchor="middle" fill="#888" font-size="10">FAIL (max retries)</text>
+  <line x1="300" y1="310" x2="500" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="410" y="230" text-anchor="middle" fill="#888" font-size="10">CANCEL</text>
+  <line x1="500" y1="430" x2="300" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="410" y="290" text-anchor="middle" fill="#888" font-size="10">retry_delay_expires</text>
+  <line x1="500" y1="430" x2="500" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="510" y="290" text-anchor="middle" fill="#888" font-size="10">CANCEL</text>
+  <rect x="240" y="30" width="120" height="40" rx="6" fill="#6c757d" opacity="0.15" stroke="#6c757d" stroke-width="2"/>
+  <text x="300" y="55" text-anchor="middle" font-weight="600" fill="#6c757d">scheduled</text>
+  <rect x="240" y="150" width="120" height="40" rx="6" fill="#0d6efd" opacity="0.15" stroke="#0d6efd" stroke-width="2"/>
+  <text x="300" y="175" text-anchor="middle" font-weight="600" fill="#0d6efd">available</text>
+  <rect x="40" y="150" width="120" height="40" rx="6" fill="#ffc107" opacity="0.15" stroke="#ffc107" stroke-width="2"/>
+  <text x="100" y="175" text-anchor="middle" font-weight="600" fill="#ffc107">pending</text>
+  <rect x="240" y="270" width="120" height="40" rx="6" fill="#fd7e14" opacity="0.15" stroke="#fd7e14" stroke-width="2"/>
+  <text x="300" y="295" text-anchor="middle" font-weight="600" fill="#fd7e14">active</text>
+  <rect x="40" y="390" width="120" height="40" rx="6" fill="#198754" opacity="0.15" stroke="#198754" stroke-width="2"/>
+  <text x="100" y="415" text-anchor="middle" font-weight="600" fill="#198754">completed</text>
+  <rect x="440" y="390" width="120" height="40" rx="6" fill="#dc3545" opacity="0.15" stroke="#dc3545" stroke-width="2"/>
+  <text x="500" y="415" text-anchor="middle" font-weight="600" fill="#dc3545">retryable</text>
+  <rect x="440" y="150" width="120" height="40" rx="6" fill="#6c757d" opacity="0.15" stroke="#6c757d" stroke-width="2"/>
+  <text x="500" y="175" text-anchor="middle" font-weight="600" fill="#6c757d">cancelled</text>
+  <rect x="240" y="510" width="120" height="40" rx="6" fill="#343a40" opacity="0.15" stroke="#343a40" stroke-width="2"/>
+  <text x="300" y="535" text-anchor="middle" font-weight="600" fill="#343a40">discarded</text>
+</svg>
