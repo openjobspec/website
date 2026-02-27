@@ -1,0 +1,257 @@
+---
+title: "Production Deployment"
+description: "Deploy OJS to production with security, observability, and high availability."
+---
+
+This guide covers everything you need to deploy OJS in a production environment.
+
+## 1. Choose Your Backend
+
+| Use Case | Recommended Backend | Why |
+|----------|-------------------|-----|
+| Speed-critical, low latency | **Redis** | Sub-millisecond enqueue, mature ecosystem |
+| ACID guarantees, SQL queryability | **PostgreSQL** | Strong durability, transactional enqueue |
+| Cloud-native microservices | **NATS** | Single binary, built-in clustering |
+| Event replay, compliance | **Kafka** | Immutable log, unlimited throughput |
+| AWS-native, zero ops | **SQS** | Fully managed, pay-per-use |
+| Development / CI | **Lite** | Zero deps, <50ms startup |
+
+See the [Backend Selection Guide](https://github.com/openjobspec/openjobspec/blob/main/docs/backend-selection-guide.md) for detailed comparison.
+
+## 2. Deploy with Kubernetes
+
+### Helm Chart
+
+```bash
+# Add the OJS Helm repository
+helm repo add openjobspec https://openjobspec.github.io/charts
+helm repo update
+
+# Install with Redis backend
+helm install ojs openjobspec/ojs-server \
+  --set backend=redis \
+  --set redis.url=redis://redis:6379 \
+  --set auth.apiKey=your-secret-key \
+  --set replicas=3
+```
+
+### Key Configuration Values
+
+```yaml
+# values.yaml
+backend: redis
+replicas: 3
+
+redis:
+  url: redis://redis-cluster:6379
+
+auth:
+  apiKey: "${OJS_API_KEY}"     # Required in production
+  enabled: true
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "250m"
+  limits:
+    memory: "512Mi"
+    cpu: "1000m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilization: 70
+
+monitoring:
+  prometheus:
+    enabled: true
+  grafana:
+    dashboards: true
+```
+
+### Docker Compose (Single Node)
+
+For simpler deployments:
+
+```bash
+cd ojs-cloud/deploy
+cp .env.example .env   # Edit with your secrets
+docker compose -f docker-compose.production.yml up -d
+```
+
+## 3. Security Hardening
+
+### Authentication
+
+All production deployments **MUST** enable API key authentication:
+
+```bash
+# Environment variable
+OJS_AUTH_REQUIRED=true
+OJS_API_KEY=your-strong-random-key-32-chars-minimum
+```
+
+:::danger[Security Warning]
+Never run with `OJS_ALLOW_INSECURE_NO_AUTH=true` in production. This flag is for local development only.
+:::
+
+### Encryption
+
+Enable job payload encryption for sensitive data:
+
+```bash
+OJS_ENCRYPTION_ENABLED=true
+OJS_ENCRYPTION_KEY=your-32-byte-aes-key-base64-encoded
+```
+
+### Network Security
+
+- Place OJS servers on a **private network** (not internet-facing)
+- Use a **reverse proxy** (Nginx, Caddy, ALB) for TLS termination
+- Enable **rate limiting** to prevent abuse
+- Set **CORS headers** if Admin UI is on a different domain
+
+### Policy Engine
+
+Define governance rules for job processing:
+
+```json
+[
+  {
+    "id": "block-pii-queue",
+    "name": "Block PII on public queues",
+    "action": "deny",
+    "enabled": true,
+    "conditions": {
+      "queues": ["public-*"],
+      "tags": ["contains-pii"]
+    }
+  }
+]
+```
+
+## 4. Observability
+
+### Prometheus Metrics
+
+Every OJS backend exposes metrics at `/metrics`:
+
+```
+# Key metrics to monitor
+ojs_jobs_enqueued_total          # Total jobs enqueued
+ojs_jobs_completed_total         # Total jobs completed
+ojs_jobs_failed_total            # Total jobs failed
+ojs_queue_depth                  # Current queue depth
+ojs_job_duration_seconds         # Job processing time histogram
+ojs_worker_active_jobs           # Currently active jobs per worker
+```
+
+### Grafana Dashboards
+
+Import the pre-built dashboards from `deploy/grafana/`:
+
+1. **Overview** — System-wide throughput, latency, error rate
+2. **Queues** — Per-queue depth, throughput, and age
+3. **Workers** — Worker count, utilization, and heartbeat status
+4. **Jobs** — Job lifecycle timing and state distribution
+5. **Errors** — Error rate by type, retry patterns, dead letter growth
+6. **Performance** — p50/p95/p99 latency, memory, CPU
+
+### Alerting
+
+Recommended alerts:
+
+| Alert | Condition | Severity |
+|-------|-----------|----------|
+| Queue backlog growing | Depth > 1000 for > 5 min | Warning |
+| High failure rate | > 10% for > 2 min | Critical |
+| Worker stall | No heartbeat for > 60s | Critical |
+| Dead letter growth | > 100 jobs in 1 hour | Warning |
+
+### OpenTelemetry
+
+Enable distributed tracing across producers and workers:
+
+```go
+// Go SDK
+worker.Use(ojs.OpenTelemetryMiddleware(ojs.OTelConfig{
+    ServiceName: "payment-worker",
+    Endpoint:    "otel-collector:4317",
+}))
+```
+
+## 5. High Availability
+
+### Multi-Replica Deployment
+
+Run 3+ OJS server replicas behind a load balancer. All backends support concurrent access from multiple server instances.
+
+### Backend Redundancy
+
+| Backend | HA Strategy |
+|---------|------------|
+| Redis | Redis Sentinel or Redis Cluster |
+| PostgreSQL | Streaming replication + pgbouncer |
+| NATS | NATS Cluster (built-in) |
+| Kafka | Multi-broker cluster |
+| SQS | AWS-managed (multi-AZ by default) |
+
+### Graceful Shutdown
+
+OJS backends support graceful shutdown:
+
+```bash
+# Kubernetes terminationGracePeriodSeconds
+terminationGracePeriodSeconds: 30
+
+# Or manually
+kill -SIGTERM <pid>   # Starts graceful shutdown
+# Active jobs complete, no new jobs are fetched
+```
+
+## 6. Performance Tuning
+
+### Worker Concurrency
+
+```bash
+# Start with: concurrency = 2 × CPU cores
+OJS_WORKER_CONCURRENCY=16
+```
+
+### Poll Interval
+
+```bash
+# High throughput: shorter interval
+OJS_WORKER_POLL_INTERVAL=200ms
+
+# Low throughput: longer to save CPU
+OJS_WORKER_POLL_INTERVAL=2s
+```
+
+### Auto-Tuning
+
+Enable the auto-tuning engine for automatic optimization:
+
+```bash
+OJS_AUTOTUNE=true
+OJS_AUTOTUNE_INTERVAL=30s
+```
+
+The engine analyzes throughput, latency, and queue depth to recommend optimal concurrency, poll intervals, and connection pool sizes.
+
+## Production Checklist
+
+- [ ] API key authentication enabled
+- [ ] TLS termination configured
+- [ ] Backend persistence configured (Redis AOF, Postgres WAL)
+- [ ] 3+ server replicas running
+- [ ] Health check endpoint monitored
+- [ ] Prometheus scraping enabled
+- [ ] Grafana dashboards imported
+- [ ] Alerting rules configured
+- [ ] Graceful shutdown tested
+- [ ] Backup strategy for backend data
+- [ ] Log aggregation configured
+- [ ] Rate limiting enabled
+- [ ] Network security reviewed
