@@ -1,0 +1,105 @@
+{
+  "version": "1.0",
+  "generated": "2026-02-27",
+  "competitors": {
+    "sidekiq": {
+      "name": "Sidekiq",
+      "languages": ["Ruby"],
+      "backends": ["Redis"],
+      "has_spec": false,
+      "sdk_count": 1,
+      "integrations": 3,
+      "ops_complexity": "low",
+      "learning_curve": "low",
+      "features": {
+        "retry_policy": true, "scheduled_jobs": true, "cron": true,
+        "unique_jobs": true, "workflows": false, "dead_letter": true,
+        "middleware": true, "priority_queues": true, "encryption": false,
+        "federation": false, "durable_execution": false, "opentelemetry": false,
+        "contract_testing": false, "policy_engine": false, "auto_tuning": false,
+        "conformance_suite": false, "admin_ui": true, "grpc": false,
+        "ai_ml_extensions": false
+      },
+      "migration_effort": { "simple": "1-2 days", "medium": "1 week", "complex": "2-3 weeks" }
+    },
+    "bullmq": {
+      "name": "BullMQ",
+      "languages": ["TypeScript", "JavaScript"],
+      "backends": ["Redis"],
+      "has_spec": false,
+      "sdk_count": 1,
+      "integrations": 4,
+      "ops_complexity": "low",
+      "learning_curve": "low",
+      "features": {
+        "retry_policy": true, "scheduled_jobs": true, "cron": true,
+        "unique_jobs": true, "workflows": true, "dead_letter": true,
+        "middleware": false, "priority_queues": true, "encryption": false,
+        "federation": false, "durable_execution": false, "opentelemetry": false,
+        "contract_testing": false, "policy_engine": false, "auto_tuning": false,
+        "conformance_suite": false, "admin_ui": true, "grpc": false,
+        "ai_ml_extensions": false
+      },
+      "migration_effort": { "simple": "1-2 days", "medium": "1 week", "complex": "2-3 weeks" }
+    },
+    "celery": {
+      "name": "Celery",
+      "languages": ["Python"],
+      "backends": ["RabbitMQ", "Redis"],
+      "has_spec": false,
+      "sdk_count": 1,
+      "integrations": 5,
+      "ops_complexity": "medium",
+      "learning_curve": "medium",
+      "features": {
+        "retry_policy": true, "scheduled_jobs": true, "cron": true,
+        "unique_jobs": false, "workflows": true, "dead_letter": true,
+        "middleware": true, "priority_queues": true, "encryption": false,
+        "federation": false, "durable_execution": false, "opentelemetry": false,
+        "contract_testing": false, "policy_engine": false, "auto_tuning": false,
+        "conformance_suite": false, "admin_ui": true, "grpc": false,
+        "ai_ml_extensions": false
+      },
+      "migration_effort": { "simple": "1-2 days", "medium": "1 week", "complex": "2-4 weeks" }
+    },
+    "temporal": {
+      "name": "Temporal",
+      "languages": ["Go", "Java", "TypeScript", "Python", ".NET"],
+      "backends": ["Cassandra", "MySQL", "PostgreSQL"],
+      "has_spec": false,
+      "sdk_count": 5,
+      "integrations": 0,
+      "ops_complexity": "high",
+      "learning_curve": "high",
+      "features": {
+        "retry_policy": true, "scheduled_jobs": true, "cron": true,
+        "unique_jobs": true, "workflows": true, "dead_letter": false,
+        "middleware": true, "priority_queues": false, "encryption": true,
+        "federation": false, "durable_execution": true, "opentelemetry": true,
+        "contract_testing": false, "policy_engine": false, "auto_tuning": false,
+        "conformance_suite": false, "admin_ui": true, "grpc": true,
+        "ai_ml_extensions": false
+      },
+      "migration_effort": { "simple": "3-5 days", "medium": "2-3 weeks", "complex": "1-2 months" }
+    },
+    "ojs": {
+      "name": "Open Job Spec",
+      "languages": ["Go", "TypeScript", "Python", "Java", "Rust", "Ruby", ".NET", "WASM"],
+      "backends": ["Redis", "PostgreSQL", "NATS", "Kafka", "SQS", "In-Memory"],
+      "has_spec": true,
+      "sdk_count": 8,
+      "integrations": 27,
+      "ops_complexity": "low",
+      "learning_curve": "low",
+      "features": {
+        "retry_policy": true, "scheduled_jobs": true, "cron": true,
+        "unique_jobs": true, "workflows": true, "dead_letter": true,
+        "middleware": true, "priority_queues": true, "encryption": true,
+        "federation": true, "durable_execution": true, "opentelemetry": true,
+        "contract_testing": true, "policy_engine": true, "auto_tuning": true,
+        "conformance_suite": true, "admin_ui": true, "grpc": true,
+        "ai_ml_extensions": true
+      }
+    }
+  }
+}
