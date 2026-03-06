@@ -251,21 +251,21 @@ mvn test
 
 ## Rust SDK
 
-**Package:** `openjobspec`
+**Package:** `ojs`
 **Requirements:** Rust 1.75+
 
 ```bash
-cargo add openjobspec
+cargo add ojs
 ```
 
 ### Client example
 
 ```rust
-use openjobspec::OJSClient;
+use ojs::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = OJSClient::new("http://localhost:8080");
+    let client = Client::new("http://localhost:8080");
 
     let job = client
         .enqueue("email.send", &["user@example.com", "welcome"])
@@ -279,11 +279,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Worker example
 
 ```rust
-use openjobspec::{OJSWorker, JobContext};
+use ojs::{Worker, JobContext};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut worker = OJSWorker::builder()
+    let mut worker = Worker::builder()
         .url("http://localhost:8080")
         .queues(&["default"])
         .concurrency(10)
@@ -314,23 +314,23 @@ cargo clippy
 
 ## Ruby SDK
 
-**Package:** `openjobspec`
+**Package:** `ojs`
 **Requirements:** Ruby 3.2+
 
 ```bash
-gem install openjobspec
+gem install ojs
 ```
 
 Or in your Gemfile:
 
 ```ruby
-gem 'openjobspec'
+gem 'ojs'
 ```
 
 ### Client example
 
 ```ruby
-require 'openjobspec'
+require 'ojs'
 
 client = OJS::Client.new(url: 'http://localhost:8080')
 job = client.enqueue('email.send', ['user@example.com', 'welcome'])
@@ -340,7 +340,7 @@ puts "Enqueued: #{job.id}"
 ### Worker example
 
 ```ruby
-require 'openjobspec'
+require 'ojs'
 
 worker = OJS::Worker.new(
   url: 'http://localhost:8080',

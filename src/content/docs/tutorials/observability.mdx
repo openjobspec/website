@@ -36,7 +36,7 @@ services:
     ports: ["6379:6379"]
 
   ojs:
-    image: ghcr.io/openjobspec/ojs-backend-redis:0.1.0
+    image: ghcr.io/openjobspec/ojs-backend-redis:0.2.0
     ports: ["8080:8080"]
     environment:
       REDIS_URL: redis://redis:6379
