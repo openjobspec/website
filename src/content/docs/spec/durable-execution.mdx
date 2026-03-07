@@ -1,0 +1,107 @@
+---
+title: "Durable Execution"
+description: "Checkpoint-based crash recovery for long-running jobs"
+---
+
+The durable execution extension provides checkpoint-based crash recovery for long-running jobs. Workers can save intermediate state during execution. If the worker crashes, the job resumes from the last checkpoint instead of restarting from scratch.
+
+## Checkpoint API
+
+Three HTTP endpoints manage checkpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PUT` | `/ojs/v1/jobs/{id}/checkpoint` | Save checkpoint state |
+| `GET` | `/ojs/v1/jobs/{id}/checkpoint` | Retrieve latest checkpoint |
+| `DELETE` | `/ojs/v1/jobs/{id}/checkpoint` | Delete checkpoint |
+
+### Save Checkpoint
+
+```http
+PUT /ojs/v1/jobs/01912e4a-7b3c-7def-8a12-abcdef123456/checkpoint
+Content-Type: application/json
+
+{
+  "state": {
+    "processed": 5000,
+    "total": 10000,
+    "cursor": "page-50"
+  }
+}
+```
+
+Each save increments a monotonic sequence number. The server enforces a 1 MB size limit on checkpoint state.
+
+### Retrieve Checkpoint
+
+```http
+GET /ojs/v1/jobs/01912e4a-7b3c-7def-8a12-abcdef123456/checkpoint
+```
+
+Returns `200` with the latest checkpoint state and sequence number, or `404` if no checkpoint exists.
+
+### Delete Checkpoint
+
+```http
+DELETE /ojs/v1/jobs/01912e4a-7b3c-7def-8a12-abcdef123456/checkpoint
+```
+
+Idempotent — returns `200` even if no checkpoint exists.
+
+## Deterministic Replay
+
+The Go, TypeScript, and Python SDKs provide a `DurableContext` that records non-deterministic operations (time, randomness, external calls) on first execution and replays recorded values on retry:
+
+```go
+// Go SDK
+worker.RegisterDurable("data.migrate", func(dc *ojs.DurableContext) error {
+    now := dc.Now()                              // deterministic
+    id := dc.Random(16)                          // deterministic
+    result := dc.SideEffect("fetch", func() {   // recorded
+        return fetchExternalAPI()
+    })
+    dc.Checkpoint(5000, map[string]any{"cursor": "page-50"})
+    return nil
+})
+```
+
+```typescript
+// TypeScript SDK
+const dc = await DurableContext.create(transport, jobId, attempt);
+const now = dc.now();                            // deterministic
+const id = dc.random(16);                        // deterministic
+const result = await dc.sideEffect("fetch", async () => {
+    return fetchExternalAPI();
+});
+await dc.checkpoint(5000, { cursor: "page-50" });
+```
+
+```python
+# Python SDK
+dc = await DurableContext.create(ctx)
+now = dc.now()                                   # deterministic
+id = dc.random(16)                               # deterministic
+result = await dc.side_effect("fetch", fetch_api)
+await dc.checkpoint(5000, {"cursor": "page-50"})
+```
+
+All 8 SDKs (Go, TypeScript, Python, Java, Rust, Ruby, .NET, PHP) support the basic checkpoint save/resume/delete operations. The deterministic replay features (Now, Random, SideEffect) are available in Go, TypeScript, Python, Java, Rust, Ruby, and .NET.
+
+## Backend Support
+
+All 6 reference backends (Redis, PostgreSQL, NATS, Kafka, SQS, Lite) implement the checkpoint endpoints. Checkpoints are stored alongside job state and cleaned up when jobs complete.
+
+## Conformance
+
+The `ext-durable-execution` conformance suite validates checkpoint operations:
+
+| Test | Description |
+|------|-------------|
+| EXT-DUR-001 | Save and retrieve checkpoint |
+| EXT-DUR-002 | Sequence number increments on multiple saves |
+| EXT-DUR-003 | Delete checkpoint |
+| EXT-DUR-004 | Overwrite replaces previous state completely |
+| EXT-DUR-005 | GET returns 404 when no checkpoint exists |
+| EXT-DUR-006 | Large nested state objects preserved |
+| EXT-DUR-007 | Delete is idempotent |
+| EXT-DUR-008 | Operations on non-existent job return 404 |

@@ -1,0 +1,101 @@
+---
+title: "Schema Registry"
+description: "Job schema registration, versioning, and validation"
+---
+
+The schema registry extension provides centralized schema management for job types. Register JSON Schemas for each job type version, enabling validation at enqueue time and breaking change detection during schema evolution.
+
+## Schema Registration API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PUT` | `/ojs/v1/admin/schemas/{type}/{version}` | Register a schema |
+| `GET` | `/ojs/v1/admin/schemas/{type}` | Get latest schema |
+| `GET` | `/ojs/v1/admin/schemas/{type}/{version}` | Get specific version |
+| `GET` | `/ojs/v1/admin/schemas/{type}/versions` | List all versions |
+| `DELETE` | `/ojs/v1/admin/schemas/{type}/{version}` | Delete a version |
+
+### Register a Schema
+
+```http
+PUT /ojs/v1/admin/schemas/email.send/2
+Content-Type: application/json
+
+{
+  "schema": {
+    "type": "array",
+    "items": [
+      { "type": "string", "description": "recipient email" },
+      {
+        "type": "object",
+        "properties": {
+          "subject": { "type": "string" },
+          "template": { "type": "string" }
+        },
+        "required": ["subject"]
+      }
+    ],
+    "minItems": 2
+  }
+}
+```
+
+Returns `201` on success. Returns `409 Conflict` if the same type/version is already registered with a different schema.
+
+### Get Latest Schema
+
+```http
+GET /ojs/v1/admin/schemas/email.send
+```
+
+Returns the most recent version registered for the type.
+
+### List Versions
+
+```http
+GET /ojs/v1/admin/schemas/email.send/versions
+```
+
+Returns all registered versions for the type, sorted newest first.
+
+## Validation Modes
+
+Backends can operate in different validation modes:
+
+| Mode | Behavior |
+|------|----------|
+| `strict` | Reject jobs that don't match the schema (returns 400) |
+| `warn` | Accept the job but log a validation warning |
+| `off` | No validation (default) |
+
+## Schema Evolution
+
+When registering a new version, the registry can detect breaking changes:
+
+- **Adding required fields** → breaking (major version bump)
+- **Removing fields** → breaking
+- **Changing field types** → breaking
+- **Adding optional fields** → non-breaking (minor version bump)
+
+## Backend Support
+
+The Redis backend has the most complete schema registry implementation. Other backends support basic schema storage. See the [Backend Parity Matrix](/reference/conformance) for details.
+
+## Conformance
+
+The `ext-schema-registry` conformance suite validates schema operations:
+
+| Test | Description |
+|------|-------------|
+| EXT-SCH-001 | Register a schema |
+| EXT-SCH-002 | Get latest schema |
+| EXT-SCH-003 | Get non-existent schema returns 404 |
+| EXT-SCH-004 | List versions |
+| EXT-SCH-005 | Delete a schema |
+| EXT-SCH-006 | Duplicate registration returns 409 |
+| EXT-SCH-007 | Get specific version |
+| EXT-SCH-008 | Delete non-existent returns 404 |
+| EXT-SCH-009 | Empty body returns 400 |
+| EXT-SCH-010 | Latest updates after delete |
+| EXT-SCH-011 | Complex schema preserved |
+| EXT-SCH-012 | List versions for non-existent type |

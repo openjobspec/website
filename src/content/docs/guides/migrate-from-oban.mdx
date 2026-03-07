@@ -1,0 +1,362 @@
+---
+title: "Migrate from Oban"
+description: "Concept mapping and step-by-step migration guide from Oban (Elixir) to OJS."
+---
+
+This guide walks you through migrating from Oban (Elixir) to Open Job Spec (OJS). Since OJS does not currently have an Elixir SDK, this guide shows the OJS Go SDK as the target implementation. If your team is doing a language migration from Elixir to Go, this guide covers both the job system migration and the language transition. For teams staying on Elixir, OJS also offers a raw HTTP API that any HTTP client can use.
+
+## Concept mapping
+
+| Oban Concept | OJS Equivalent | Notes |
+|-------------|---------------|-------|
+| `use Oban.Worker` | `worker.Register("type", handler)` | OJS uses function registration, not module-based workers |
+| `Oban.insert/2` | `client.Enqueue(ctx, type, args, opts...)` | Go functional options pattern |
+| `Oban.insert_all/2` | `client.EnqueueBatch(ctx, requests)` | Atomic batch insertion |
+| `Oban.Pro.Workflow` | `ojs.Chain(steps...)` / `ojs.Group(jobs...)` | First-class workflow primitives |
+| `Oban.Pro.Batch` | `ojs.Batch(callbacks, jobs...)` | Built-in batch with callbacks |
+| `unique: [period: 60]` | `ojs.WithUnique(UniquePolicy{...})` | Built-in uniqueness constraints |
+| `queue: :default` | `ojs.WithQueue("default")` | Per-enqueue queue assignment |
+| `max_attempts: 5` | `ojs.WithRetry(RetryPolicy{MaxAttempts: 5})` | Per-enqueue retry policy |
+| `schedule_in: 300` | `ojs.WithDelay(5 * time.Minute)` | Go `time.Duration` |
+| `scheduled_at: ~U[...]` | `ojs.WithScheduledAt(t)` | Go `time.Time` |
+| `priority: 0` (0 = highest) | `ojs.WithPriority(3)` (higher = higher) | Priority convention differs |
+| `tags: ["import"]` | `ojs.WithTags("import")` | String tags for filtering |
+| Crontab plugin | `client.RegisterCronJob(ctx, req)` | Server-managed cron |
+| `Oban.cancel_job/1` | `client.CancelJob(ctx, id)` | Cancel by job ID |
+| Oban.Pro unique jobs | `ojs.WithUnique(UniquePolicy{...})` | Built-in, no Pro license |
+| Oban Web (Pro) | OJS query API or dashboard | Structured queue stats |
+| PostgreSQL-backed | OJS backend (Redis or PostgreSQL) | Backend-portable |
+
+## Before and after code examples
+
+### Defining workers
+
+**Before (Oban / Elixir):**
+
+```elixir
+defmodule MyApp.Workers.EmailWorker do
+  use Oban.Worker,
+    queue: :email,
+    max_attempts: 5,
+    unique: [period: 60]
+
+  @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"to" => to, "template" => template}}) do
+    case EmailService.send(to, template) do
+      {:ok, message_id} -> {:ok, %{message_id: message_id}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+end
+```
+
+**After (OJS / Go):**
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "os/signal"
+    "syscall"
+
+    "github.com/openjobspec/ojs-go-sdk"
+)
+
+func main() {
+    worker := ojs.NewWorker("http://localhost:8080",
+        ojs.WithQueues("email", "default"),
+        ojs.WithConcurrency(10),
+    )
+
+    worker.Register("email.send", func(ctx ojs.JobContext) error {
+        to, _ := ctx.Job.Args["to"].(string)
+        template, _ := ctx.Job.Args["template"].(string)
+
+        messageID, err := emailService.Send(ctx.Context(), to, template)
+        if err != nil {
+            return err  // Server retries based on the retry policy
+        }
+
+        ctx.SetResult(map[string]any{"message_id": messageID})
+        return nil
+    })
+
+    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+    defer cancel()
+
+    if err := worker.Start(ctx); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### Enqueuing jobs
+
+**Before (Oban / Elixir):**
+
+```elixir
+# Simple enqueue
+%{to: "user@example.com", template: "welcome"}
+|> MyApp.Workers.EmailWorker.new()
+|> Oban.insert()
+
+# With options
+%{to: "user@example.com", template: "welcome"}
+|> MyApp.Workers.EmailWorker.new(
+  queue: :critical,
+  max_attempts: 10,
+  priority: 0,
+  scheduled_at: DateTime.add(DateTime.utc_now(), 300),
+  tags: ["high-priority"]
+)
+|> Oban.insert()
+
+# Batch insert
+changesets = Enum.map(users, fn user ->
+  MyApp.Workers.EmailWorker.new(%{to: user.email, template: "welcome"})
+end)
+Oban.insert_all(changesets)
+```
+
+**After (OJS / Go):**
+
+```go
+client, err := ojs.NewClient("http://localhost:8080")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Simple enqueue
+job, err := client.Enqueue(ctx, "email.send",
+    ojs.Args{"to": "user@example.com", "template": "welcome"},
+)
+
+// With options
+job, err := client.Enqueue(ctx, "email.send",
+    ojs.Args{"to": "user@example.com", "template": "welcome"},
+    ojs.WithQueue("critical"),
+    ojs.WithRetry(ojs.RetryPolicy{MaxAttempts: 10}),
+    ojs.WithPriority(3),
+    ojs.WithDelay(5 * time.Minute),
+    ojs.WithTags("high-priority"),
+)
+
+// Batch insert
+requests := make([]ojs.JobRequest, len(users))
+for i, user := range users {
+    requests[i] = ojs.JobRequest{
+        Type: "email.send",
+        Args: ojs.Args{"to": user.Email, "template": "welcome"},
+    }
+}
+jobs, err := client.EnqueueBatch(ctx, requests)
+```
+
+### Workflows (Oban Pro)
+
+**Before (Oban.Pro.Workflow / Elixir):**
+
+```elixir
+Oban.Pro.Workflow.new()
+|> Oban.Pro.Workflow.add(:fetch, MyApp.Workers.FetchWorker.new(%{url: "https://..."}))
+|> Oban.Pro.Workflow.add(:transform, MyApp.Workers.TransformWorker.new(%{format: "csv"}),
+     deps: [:fetch])
+|> Oban.Pro.Workflow.add(:load, MyApp.Workers.LoadWorker.new(%{dest: "warehouse"}),
+     deps: [:transform])
+|> Oban.insert_all()
+```
+
+**After (OJS / Go):**
+
+```go
+// Chain (sequential): fetch -> transform -> load
+workflow, err := client.CreateWorkflow(ctx, ojs.Chain(
+    ojs.Step{Type: "data.fetch", Args: ojs.Args{"url": "https://..."}},
+    ojs.Step{Type: "data.transform", Args: ojs.Args{"format": "csv"}},
+    ojs.Step{Type: "data.load", Args: ojs.Args{"dest": "warehouse"}},
+))
+
+// Group (parallel fan-out)
+workflow, err := client.CreateWorkflow(ctx, ojs.Group(
+    ojs.Step{Type: "export.csv", Args: ojs.Args{"report_id": 456}},
+    ojs.Step{Type: "export.pdf", Args: ojs.Args{"report_id": 456}},
+    ojs.Step{Type: "export.xlsx", Args: ojs.Args{"report_id": 456}},
+))
+
+// Batch (parallel with callbacks, like Oban.Pro.Batch)
+workflow, err := client.CreateWorkflow(ctx, ojs.Batch(
+    ojs.BatchCallbacks{
+        OnComplete: &ojs.Step{Type: "batch.report", Args: ojs.Args{}},
+        OnSuccess:  &ojs.Step{Type: "batch.celebrate", Args: ojs.Args{}},
+        OnFailure:  &ojs.Step{Type: "batch.alert", Args: ojs.Args{"channel": "#ops"}},
+    },
+    ojs.Step{Type: "process.chunk", Args: ojs.Args{"chunk_id": 0}},
+    ojs.Step{Type: "process.chunk", Args: ojs.Args{"chunk_id": 1}},
+    ojs.Step{Type: "process.chunk", Args: ojs.Args{"chunk_id": 2}},
+))
+```
+
+### Crontab
+
+**Before (Oban Crontab plugin / Elixir):**
+
+```elixir
+config :my_app, Oban,
+  plugins: [
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"0 3 * * *", MyApp.Workers.CleanupWorker},
+       {"0 9 * * 1", MyApp.Workers.DigestWorker, args: %{type: "weekly"}},
+     ]}
+  ]
+```
+
+**After (OJS / Go):**
+
+```go
+_, err := client.RegisterCronJob(ctx, ojs.CronJobRequest{
+    Name:     "cleanup-nightly",
+    Cron:     "0 3 * * *",
+    Timezone: "UTC",
+    Type:     "maintenance.cleanup",
+    Args:     ojs.Args{},
+})
+
+_, err = client.RegisterCronJob(ctx, ojs.CronJobRequest{
+    Name:     "digest-weekly",
+    Cron:     "0 9 * * 1",
+    Timezone: "America/New_York",
+    Type:     "email.weekly_digest",
+    Args:     ojs.Args{"type": "weekly"},
+    Options:  []ojs.EnqueueOption{ojs.WithQueue("email")},
+})
+```
+
+## Key differences and gotchas
+
+### 1. Language transition: Elixir to Go
+
+This migration involves both a job system change and a language change. Key differences:
+
+- **Concurrency model:** Elixir uses lightweight BEAM processes. Go uses goroutines. Both are cheap to create, but the programming models differ.
+- **Error handling:** Elixir uses pattern matching on `{:ok, result}` / `{:error, reason}`. Go uses explicit `error` return values.
+- **Immutability:** Elixir data is immutable. Go has mutable data with explicit synchronization.
+
+### 2. No Elixir SDK (yet)
+
+OJS does not currently have an Elixir SDK. Your options:
+
+- **Use the Go SDK** (recommended if migrating to Go).
+- **Use the HTTP API directly** from Elixir with any HTTP client (HTTPoison, Req, Finch).
+- **Use any other OJS SDK** (TypeScript, Python, Java, Rust, Ruby).
+
+Using the HTTP API directly from Elixir:
+
+```elixir
+{:ok, response} = HTTPoison.post(
+  "http://localhost:8080/ojs/v1/jobs",
+  Jason.encode!(%{
+    type: "email.send",
+    args: ["user@example.com", "welcome"],
+    options: %{queue: "email", retry: %{max_attempts: 5}}
+  }),
+  [{"Content-Type", "application/json"}]
+)
+```
+
+### 3. Priority convention
+
+Oban uses lower numbers for higher priority (0 is highest, 3 is lowest). OJS uses higher numbers for higher priority. Invert your priority values when migrating.
+
+| Priority Level | Oban Value | OJS Value |
+|---------------|-----------|-----------|
+| High | 0 | 3 |
+| Normal | 1 | 2 |
+| Low | 3 | 1 |
+
+### 4. Database coupling
+
+Oban is tightly coupled to PostgreSQL and uses Ecto for database operations. Oban jobs live in the same database as your application data, which enables transactional enqueue:
+
+```elixir
+Multi.new()
+|> Multi.insert(:user, User.changeset(attrs))
+|> Multi.run(:job, fn _repo, %{user: user} ->
+  MyApp.Workers.WelcomeWorker.new(%{user_id: user.id}) |> Oban.insert()
+end)
+|> Repo.transaction()
+```
+
+OJS uses an HTTP API, so transactional enqueue with your application database requires an outbox pattern or two-phase approach. The OJS server handles its own storage independently.
+
+### 5. Retry policy location
+
+In Oban, retry configuration is on the worker module (`max_attempts: 5`). In OJS, retry policy is set at enqueue time. The same job type can have different retry policies depending on the caller.
+
+### 6. Oban Pro features are built-in
+
+Several features that require Oban Pro (paid license) are included in OJS by default:
+
+- **Workflows** (chain, group, batch)
+- **Batch callbacks** (on_complete, on_success, on_failure)
+- **Unique jobs** with configurable conflict resolution
+- **Queue management** (pause, resume, stats)
+
+## Step-by-step migration plan
+
+### Phase 1: Set up OJS infrastructure (day 1)
+
+Start the OJS server (can use PostgreSQL, same as Oban):
+
+```yaml
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ojs
+      POSTGRES_PASSWORD: secret
+    ports: ["5432:5432"]
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-postgres:latest
+    ports: ["8080:8080"]
+    environment:
+      DATABASE_URL: postgres://postgres:secret@postgres:5432/ojs?sslmode=disable
+    depends_on: [postgres]
+```
+
+### Phase 2: Map worker modules to handlers (week 1)
+
+For each Oban worker module:
+
+1. Choose a dot-namespaced type name (`MyApp.Workers.EmailWorker` becomes `email.send`).
+2. Create a Go handler function.
+3. Map `%Oban.Job{args: args}` pattern matching to Go type assertions on `ctx.Job.Args`.
+
+### Phase 3: Migrate producers (week 1-2)
+
+Replace `Oban.insert/2` calls with `client.Enqueue()`. Map Oban worker options to OJS enqueue options.
+
+### Phase 4: Run both systems in parallel (week 2-3)
+
+Keep Oban workers running alongside OJS workers. Migrate one job type at a time.
+
+### Phase 5: Cutover (week 3-4)
+
+1. Remove Oban from your Elixir deps.
+2. Drop the `oban_jobs` table (after verifying all jobs are drained).
+3. Shut down Elixir worker nodes.
+
+### Rollback plan
+
+During migration, keep Oban running. If a migrated job type has problems on OJS, revert the producer to `Oban.insert()` and re-enable the Oban worker. The systems operate on different databases (or different tables in the same database).
+
+## What you gain
+
+- **Language flexibility.** Process jobs from Go, Python, TypeScript, Java, Rust, or Ruby. Useful if your team is growing beyond the Elixir ecosystem.
+- **Backend portability.** Switch between Redis and PostgreSQL without changing application code. Oban is PostgreSQL-only.
+- **No Pro license needed.** Workflows, batches, unique jobs, and queue management are all built into OJS.
+- **Standardized protocol.** OJS is a specification with conformance testing. Any conformant backend works with any conformant SDK.
+- **Structured error history.** Every failed attempt records full error details, not just the last error.
+- **Cross-service interoperability.** An Elixir service can enqueue jobs (via HTTP) that a Go service processes, or vice versa.

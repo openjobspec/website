@@ -82,6 +82,8 @@ export default defineConfig({
               slug: 'spec/extension-interactions',
             },
             { label: 'ML Extensions', slug: 'spec/ml-extensions' },
+            { label: 'Durable Execution', slug: 'spec/durable-execution' },
+            { label: 'Schema Registry', slug: 'spec/schema-registry' },
           ],
         },
         {
@@ -115,6 +117,14 @@ export default defineConfig({
               label: 'Workflow Patterns',
               slug: 'tutorials/workflow-patterns',
             },
+            {
+              label: 'Observability',
+              slug: 'tutorials/observability',
+            },
+            {
+              label: 'Production Deployment',
+              slug: 'tutorials/production-deployment',
+            },
           ],
         },
         {
@@ -140,6 +150,14 @@ export default defineConfig({
             {
               label: 'Migrate from Celery',
               slug: 'guides/migrate-from-celery',
+            },
+            {
+              label: 'Migrate from Go',
+              slug: 'guides/migrating-from-go',
+            },
+            {
+              label: 'Migrate from Oban',
+              slug: 'guides/migrate-from-oban',
             },
           ],
         },
@@ -168,6 +186,8 @@ export default defineConfig({
               slug: 'ecosystem/integrations',
             },
             { label: 'Tools', slug: 'ecosystem/tools' },
+            { label: 'Adopters', slug: 'ecosystem/adopters' },
+            { label: 'Cloud', slug: 'ecosystem/cloud' },
           ],
         },
         {
