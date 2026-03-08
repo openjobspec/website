@@ -7,77 +7,198 @@ description: "Canonical definitions for OJS terminology"
 
 | Term | Definition |
 |------|-----------|
-| **Backend** | A server implementation of the OJS specification that stores and manages jobs. Examples: ojs-backend-redis, ojs-backend-postgres. |
-| **Client** | An SDK component that produces jobs. The client enqueues jobs by sending them to the backend via HTTP or gRPC. |
-| **Handler** | A function registered by a worker to process a specific job type. |
-| **Job** | A unit of work described by a job envelope. Contains a type, arguments, and metadata. |
-| **Job Envelope** | The complete data structure representing a job, including all required and optional fields. |
-| **Middleware** | A composable function that wraps enqueue or execution logic, enabling cross-cutting concerns. |
-| **Queue** | A named channel that holds jobs waiting to be processed. |
-| **Worker** | An SDK component that consumes and processes jobs from one or more queues. |
+| **Backend** | The persistent storage layer (e.g., PostgreSQL, Redis) that durably stores job envelopes, state, and queue metadata. |
+| **Client** | A component that creates and enqueues jobs into a queue by constructing job envelopes and submitting them to a backend. |
+| **Handler** | A user-defined function that performs the actual work for a job. Each job type is associated with exactly one handler. |
+| **Job** | A discrete unit of work described by a job envelope, carrying a type identifier, arguments, and metadata. |
+| **Job Envelope** | The complete data structure representing a job, including required attributes (type, arguments, state) and optional attributes (priority, queue, tags, metadata). |
+| **Middleware** | A composable component that wraps handler execution or job enqueueing to add cross-cutting behavior such as logging or telemetry. |
+| **Queue** | A named, logical channel through which jobs flow from clients to workers, providing ordering guarantees and isolation. |
+| **Spec Version** | The OJS specification version to which a job envelope or implementation conforms. |
+| **State Transition** | A change from one lifecycle state to another. State transitions MUST be atomic and follow the valid transition graph. |
+| **Terminal State** | A lifecycle state from which no further transitions are permitted: `completed`, `cancelled`, or `discarded`. |
+| **Worker** | A process that polls queues, claims available jobs, and dispatches them to the appropriate handler for execution. |
 
-## Lifecycle States
+## Job Lifecycle States
 
 | State | Definition |
 |-------|-----------|
-| **scheduled** | Job is waiting for its `scheduled_at` time to arrive. |
-| **available** | Job is ready to be fetched by a worker. |
-| **pending** | Job has been claimed by a worker but processing has not started (transitional). |
-| **active** | Job is currently being processed by a worker. |
-| **completed** | Job handler returned success. Terminal state. |
-| **retryable** | Job handler failed and the job is waiting for retry. |
-| **cancelled** | Job was cancelled before completion. Terminal state. |
-| **discarded** | Job exhausted retries and was discarded. Terminal state. |
+| **scheduled** | The job has a future execution time and is not yet eligible for processing. Transitions to `available` when its scheduled time arrives. |
+| **available** | The job is eligible to be claimed by a worker and resides in the queue awaiting pickup. |
+| **pending** | The job is accepted but awaits preconditions (e.g., dependency resolution) before becoming available. |
+| **active** | The job has been claimed by a worker and is currently being executed. |
+| **completed** | The handler finished successfully. Terminal state. |
+| **retryable** | The job failed but is eligible for automatic retry. It will transition back to `available` or `scheduled` after the backoff elapses. |
+| **cancelled** | The job was explicitly cancelled before completion. Terminal state. |
+| **discarded** | The job has exhausted all retries or been permanently rejected. Terminal state. May be moved to a dead letter queue. |
 
 ## Reliability
 
 | Term | Definition |
 |------|-----------|
-| **At-least-once** | Delivery guarantee ensuring every job is processed at least once. May result in duplicates. |
-| **Dead letter queue (DLQ)** | Storage for jobs that have permanently failed, available for inspection and manual retry. |
-| **Idempotency** | Property of a handler where processing the same job multiple times produces the same result. |
-| **Replay** | Re-enqueuing a dead letter job for another processing attempt. |
-| **Visibility timeout** | Time a fetched job is reserved for a worker before becoming available again. |
+| **Automatic Replay** | Programmatic re-enqueuing of dead-lettered jobs in response to a fix or configuration change, without manual per-job action. |
+| **Dead Letter Job** | A job moved to a dead letter queue after exhausting all retry attempts or being explicitly discarded. |
+| **Dead Letter Queue (DLQ)** | A special-purpose queue that receives permanently failed jobs for inspection, debugging, and potential re-processing. |
+| **Manual Retry** | An operator-initiated action that re-enqueues a specific failed or dead-lettered job, typically via an admin API. |
+| **Pruning** | Removing expired or obsolete jobs from a DLQ or backend storage based on retention policy rules (age or count thresholds). |
+| **Retention Policy** | Configuration governing how long dead-lettered or completed jobs are preserved before becoming eligible for pruning. |
+| **Retry Policy** | Rules determining how and when a failed job is retried, including max attempts, backoff strategy, and jitter. |
 
-## Scheduling
+## Scheduling & Shutdown
 
 | Term | Definition |
 |------|-----------|
-| **Cron job** | A recurring job defined by a cron expression that triggers on a schedule. |
-| **Delayed job** | A job with a future `scheduled_at` time, promoted to `available` when the time arrives. |
-| **Overlap policy** | Strategy for handling a cron trigger when the previous instance is still running. |
+| **Cron Expression** | A string defining a recurring schedule using standard cron syntax, used to create periodic jobs at specified intervals. |
+| **Drain Phase** | The second shutdown phase where the worker stops accepting new jobs and waits for active jobs to complete within the grace period. |
+| **Force-Stop** | The action taken when the grace period expires: the worker terminates remaining work and releases held jobs back to the queue. |
+| **Grace Period** | Maximum duration a worker waits during shutdown for active jobs to complete before force-stopping. |
+| **Graceful Shutdown** | A controlled process where a worker stops accepting new work and allows in-flight jobs to complete before terminating. |
+| **Overlap Policy** | A rule governing behavior when a cron-scheduled job is due while a previous instance is still active (e.g., skip, enqueue, cancel-previous). |
+| **PID 1 Problem** | A container deployment concern where the worker runs as PID 1 and may not receive POSIX signals correctly, interfering with graceful shutdown. |
+| **Quiet Phase** | The first shutdown phase where the worker signals it will stop polling but continues executing already-claimed work. |
 
 ## Worker Protocol
 
 | Term | Definition |
 |------|-----------|
-| **Heartbeat** | Periodic signal from a worker to the backend indicating it is alive and reporting active jobs. |
-| **Grace period** | Time allowed for in-flight jobs to complete during shutdown before forced termination. |
-| **Quiet mode** | Worker state where it stops fetching new jobs but continues processing in-flight jobs. |
+| **Heartbeat** | A periodic signal from a worker to the backend indicating it is alive and processing a claimed job. Missed heartbeats may trigger visibility timeout expiration. |
+| **Reservation** | The act of claiming a job from a queue for exclusive processing, granting the worker a visibility timeout window. |
+| **Visibility Timeout** | Maximum duration a job may remain `active` without heartbeat renewal before the backend makes it available for re-processing. |
 
 ## Workflows
 
 | Term | Definition |
 |------|-----------|
-| **Chain** | Sequential workflow: each step runs after the previous completes. |
-| **Group** | Parallel workflow: all steps run concurrently, completing when all finish. |
-| **Batch** | Parallel workflow with callbacks: steps run concurrently, a callback fires on completion. |
+| **Batch (workflow)** | A pattern that enqueues independent jobs as a named group, enabling collective monitoring and completion callbacks. |
+| **Callback** | A job or function invoked when a workflow step or group reaches a specified state, triggering downstream processing. |
+| **Chain (workflow)** | A pattern where jobs execute sequentially, each starting only after its predecessor completes. Failures halt the chain unless an error strategy is defined. |
+| **Fan-in** | A synchronization point where multiple parallel jobs must complete before a single downstream job begins. |
+| **Fan-out** | A pattern spawning multiple parallel jobs from a single parent; results may be aggregated at a fan-in point. |
+| **Group (workflow)** | A pattern executing multiple jobs in parallel, optionally with a concurrency limit, completing when all members reach a terminal state. |
 
-## Extensions
-
-| Term | Definition |
-|------|-----------|
-| **Backpressure** | Mechanism for handling producer overload when queues approach capacity. |
-| **Codec** | An encode/decode function pair for transforming job payloads (encryption, compression). |
-| **Conformance level** | A tier (0–4) indicating which specification features a backend implements. |
-| **Extension** | An optional specification module that adds functionality beyond the core (retry, workflows, etc.). |
-| **Rate limiting** | Controls on how fast jobs are processed, protecting downstream services. |
-| **Unique job** | A job with deduplication constraints preventing duplicate processing. |
-
-## Wire Formats & Protocols
+## Observability
 
 | Term | Definition |
 |------|-----------|
-| **Job args** | An array of values passed to the job handler. OJS uses `args` (array), not `payload` (object). |
-| **Meta** | A key-value map for arbitrary metadata attached to a job (trace context, tenant ID, etc.). |
-| **UUIDv7** | Time-sortable UUID format used for job IDs, providing natural chronological ordering. |
+| **Cardinality** | The number of distinct values a metric label or span attribute can take. High cardinality should be avoided. |
+| **Semantic Conventions** | Standardized attribute names and values for spans and metrics, aligned with OpenTelemetry, ensuring interoperable telemetry. |
+| **Span** | A named, timed operation within a trace representing a unit of work (e.g., enqueue, handler execution, retry attempt). |
+| **Span Link** | An association between causally related spans that lack a direct parent-child relationship, such as linking execution to enqueue. |
+| **Trace Context** | Propagated metadata (trace ID, span ID, trace flags) connecting distributed spans into a logical trace. Implementations should propagate W3C Trace Context through job metadata. |
+
+## Rate Limiting & Backpressure
+
+| Term | Definition |
+|------|-----------|
+| **Backpressure** | A flow-control mechanism where downstream components signal upstream to slow down when queues approach their configured bounds. |
+| **Backpressure Action** | The behavior taken when a queue reaches its bound (e.g., reject, block, or drop lowest-priority jobs). |
+| **Bounded Queue** | A queue with a configured maximum capacity that applies its backpressure action when the bound is reached. |
+| **Concurrency Limit** | Maximum number of jobs executing simultaneously, scoped to a queue, worker, or global level. |
+| **Headroom** | Remaining capacity in a bounded queue (bound minus current depth), used to determine when backpressure applies. |
+| **Partition** | A logical subdivision within a rate limit scope enabling independent rate tracking (e.g., per-customer limits in a shared queue). |
+| **Queue Bound** | The configured maximum number of jobs a bounded queue may hold before triggering backpressure. |
+| **Queue Depth** | The current number of jobs in a queue across all non-terminal states, used as the primary backpressure metric. |
+| **Rate Limit** | A constraint on jobs processed or enqueued within a time window, expressed as count per window duration. |
+| **Rate Limit Key** | A string identifier grouping jobs that share the same rate limit counter. |
+| **Scope** | The boundary within which a rate or concurrency limit applies (e.g., per-queue, per-worker, per-key, global). |
+| **Throttle** | Deliberately slowing job processing to stay within a rate limit; throttled jobs are delayed rather than rejected. |
+| **Window** | A fixed or sliding time interval used to measure rate limit consumption (e.g., 100 jobs per 60-second window). |
+
+## Multi-Tenancy
+
+| Term | Definition |
+|------|-----------|
+| **Fairness** | A scheduling property ensuring each tenant receives equitable processing capacity, preventing monopolization. |
+| **Namespace** | A logical grouping that isolates jobs, queues, and configuration for different tenants or environments within a shared backend. |
+| **Noisy Neighbor** | A condition where one tenant's workload degrades performance for others due to shared resource contention. |
+| **Sharded Queue** | A queue distributing jobs across multiple physical partitions to improve throughput and enable tenant-level isolation. |
+| **Starvation** | A condition where a tenant's jobs are perpetually delayed because other tenants consume all available worker capacity. |
+| **Tenant** | An organizational entity (e.g., customer, team) that owns jobs and queues within a shared OJS deployment. |
+| **Tenant ID** | A unique identifier for a tenant, propagated through job metadata for routing, rate limiting, and access control. |
+
+## Encryption & Codecs
+
+| Term | Definition |
+|------|-----------|
+| **Ciphertext** | The encrypted form of job payload data, opaque to the backend and decodable only by a codec with the appropriate key. |
+| **Codec** | A component that encodes and decodes job payloads, performing serialization, compression, encryption, or other transformations. |
+| **Codec Chain** | An ordered sequence of codecs applied during encoding (and reversed during decoding), e.g., JSON → gzip → AES-256. |
+| **Codec Server** | A standalone service performing codec operations on behalf of clients or workers, enabling centralized key management. |
+| **Compression Codec** | A codec that reduces payload size (e.g., gzip, zstd), typically applied before encryption in a codec chain. |
+| **Encryption Codec** | A codec that encrypts job payloads to protect data at rest and in transit. Must support key rotation and should use authenticated encryption. |
+| **Payload Codec** | The primary codec for serializing and deserializing job arguments between in-memory and stored byte formats. |
+| **Plaintext** | The unencrypted, human-readable form of job payload data. |
+
+## Framework Integration
+
+| Term | Definition |
+|------|-----------|
+| **Framework Adapter** | A library-specific integration layer bridging an OJS backend with a host framework (e.g., Rails, Django, Spring), handling lifecycle hooks and idiomatic APIs. |
+| **Outbox Pattern** | A reliability pattern where jobs are written to an outbox table in the same transaction as the business operation, then relayed to the queue asynchronously. |
+| **Request Context** | The ambient context (e.g., HTTP request, current user) available at enqueue time. Adapters may capture and propagate it into job metadata. |
+| **Transactional Enqueue** | Enqueuing a job within the same database transaction as a business operation, ensuring the job exists if and only if the transaction commits. |
+
+## Versioning
+
+| Term | Definition |
+|------|-----------|
+| **Canary Deployment** | A strategy where a new worker version is rolled out to a small subset first, allowing validation before full rollout. |
+| **Compatible Worker** | A worker that declares support for a specific job version or version range and can correctly process those jobs. |
+| **Job Version** | A numeric or semantic identifier indicating the schema and behavior contract of a job type's arguments and handler. |
+| **Rolling Deployment** | A strategy where new worker versions are gradually introduced while old versions continue processing, enabling zero-downtime upgrades. |
+| **Schema Evolution** | Changing a job's argument structure over time while maintaining compatibility with existing jobs and workers. |
+| **Schema Version** | A version identifier for a job's argument structure, distinct from the job version, enabling independent payload evolution. |
+| **Version Range** | A semver-compatible expression declaring which job versions a worker accepts, used for routing jobs to compatible workers. |
+
+## Testing
+
+| Term | Definition |
+|------|-----------|
+| **Assertion Helper** | A test utility that simplifies verification of job enqueueing, execution results, and state transitions. |
+| **Drain (testing)** | A test operation that synchronously processes all enqueued jobs until the queue is empty, ensuring deterministic execution. |
+| **Fake Mode** | A testing mode that captures enqueued jobs in memory without executing them, useful for verifying enqueue behavior. |
+| **Inline Mode** | A testing mode that executes handlers synchronously at the point of enqueue, providing immediate feedback. |
+| **Real Mode** | A testing mode using actual backend infrastructure for full end-to-end integration testing. |
+| **Test Context** | An isolated testing environment with its own queue, backend state, and configuration to prevent cross-test pollution. |
+
+## Middleware
+
+| Term | Definition |
+|------|-----------|
+| **Chain Management** | The API and rules for registering, ordering, inserting, and removing middleware within a chain (prepend, append, insert-before, insert-after). |
+| **Enqueue Middleware** | Middleware executing during the enqueue path before persistence, used for validation, enrichment, or deduplication. |
+| **Execution Middleware** | Middleware wrapping handler execution for concerns such as error handling, logging, and transaction management. |
+| **Middleware Chain** | An ordered list of middleware components forming a pipeline through which a job passes during enqueue or execution. |
+| **Yield/Next** | The mechanism by which middleware delegates to the next component in the chain. Middleware must call yield/next exactly once to continue, or skip it to short-circuit. |
+
+## Admin & Operations
+
+| Term | Definition |
+|------|-----------|
+| **Admin Endpoint** | An HTTP or gRPC endpoint exposing administrative operations such as queue inspection, job cancellation, and worker management. |
+| **Bulk Operation** | An administrative action applied to multiple jobs or queues simultaneously (e.g., bulk cancel, bulk retry, bulk discard). |
+| **Control Plane** | APIs and interfaces for managing and configuring the job processing system, distinct from the data plane. |
+| **Data Plane** | The runtime path through which jobs are enqueued, dispatched, and executed, prioritizing throughput and low latency. |
+| **Queue Configuration** | Parameters defining queue behavior: concurrency limits, rate limits, priority, retry policy, and backpressure settings. |
+| **Stale Worker** | An unresponsive worker whose claimed jobs have not been released. Stale worker detection enables job recovery. |
+
+## Extension System
+
+| Term | Definition |
+|------|-----------|
+| **Capability Negotiation** | The process by which a client or worker discovers extensions supported by a backend, enabling graceful degradation. |
+| **Conformance Level** | A classification indicating how fully an implementation satisfies a specification tier (e.g., "Core-conformant"). |
+| **Deprecation** | Formally marking an extension as obsolete. Deprecated extensions remain functional for a defined period but should not be used in new implementations. |
+| **Extension** | A self-contained, optional specification module adding functionality beyond the core OJS spec, following a defined lifecycle. |
+| **Extension Identifier** | A unique URI or URN identifying an extension (e.g., `urn:ojs:spec:retry`), used in capability negotiation and conformance declarations. |
+| **Promotion** | Advancing an extension from one tier to a higher tier (e.g., experimental → stable) based on maturity and community consensus. |
+| **Tier** | A classification level indicating extension maturity and stability (e.g., Core, Stable, Experimental, Deprecated). |
+
+## Wire Format & Protocol
+
+| Term | Definition |
+|------|-----------|
+| **Batch Encoding** | A wire format convention for encoding multiple job envelopes in a single message, enabling efficient bulk submission. |
+| **Content Type** | A media type (e.g., `application/json`) declaring the serialization format of a job envelope on the wire. |
+| **Protocol Binding** | A specification mapping OJS operations onto a transport protocol (HTTP or gRPC), defining endpoints, methods, headers, and error codes. |
+| **Wire Format** | The byte-level representation of a job envelope during transmission. OJS defines a canonical JSON format and permits alternatives via content type negotiation. |

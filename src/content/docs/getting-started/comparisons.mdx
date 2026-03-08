@@ -1,9 +1,10 @@
 ---
-title: "OJS vs Competitors"
-description: "A comprehensive, fair comparison of Open Job Spec against Temporal, Inngest, BullMQ, Celery, Sidekiq, and AWS Step Functions for background job processing."
+title: "Comparisons"
+description: "A comprehensive, fair comparison of Open Job Spec against Temporal, Inngest, BullMQ, Celery, Sidekiq, and AWS Step Functions."
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import ComparisonSelector from '../../../components/ComparisonSelector.astro';
 
 Open Job Spec (OJS) is a **vendor-neutral, open standard** for background job processing — think CloudEvents, but for jobs. This page provides an honest, side-by-side comparison with leading alternatives so you can choose the right tool for your architecture.
 
@@ -21,9 +22,13 @@ Most job frameworks are **products** — tightly coupled libraries where the pro
   OJS doesn't replace your favorite language's job library — it gives all of them a common language to speak.
 </Aside>
 
+## What are you migrating from?
+
+<ComparisonSelector />
+
 ## Comparison Matrix
 
-The table below compares OJS against six popular alternatives across key dimensions.
+The tables below compare OJS against popular alternatives across key dimensions.
 
 <Aside type="note">
   ✅ = Built-in &nbsp; ⚡ = Paid/Pro feature &nbsp; 🔌 = Plugin/extension &nbsp; ❌ = Not available &nbsp; ⏳ = Planned &nbsp; ➖ = Not applicable
@@ -108,6 +113,129 @@ The table below compares OJS against six popular alternatives across key dimensi
 | **Admin UI** | ✅ | ✅ | ✅ | ✅ (Board) | ✅ (Flower) | ✅ (Web UI) | ✅ (Console) |
 | **Prometheus metrics** | ✅ | ✅ | ❌ | 🔌 | 🔌 | 🔌 | ➖ (CloudWatch) |
 | **OpenTelemetry** | ✅ | ✅ | ✅ | ❌ | 🔌 | ❌ | ✅ (X-Ray) |
+
+## Detailed Comparisons
+
+### vs Sidekiq
+
+[Sidekiq](https://sidekiq.org) is the most popular background job library for Ruby, known for its performance and simplicity.
+
+| Aspect | OJS | Sidekiq |
+|:---|:---|:---|
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | Ruby only |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | Redis only |
+| **Job format** | Standardized envelope with specversion | Sidekiq-specific JSON |
+| **Lifecycle states** | 8 (scheduled, available, pending, active, completed, retryable, cancelled, discarded) | 3 (enqueued, busy, dead) |
+| **Retry strategy** | Configurable per-job (exponential, linear, custom) | Global exponential backoff |
+| **Workflows** | Built-in: chain, group, batch | Sidekiq Pro/Enterprise (paid) |
+| **Unique jobs** | Built-in with configurable scope | Sidekiq Enterprise (paid) |
+| **Protocol** | HTTP + gRPC + AMQP | Redis protocol (internal) |
+| **Conformance tests** | 194 test cases across 5 levels | None |
+
+**When to choose Sidekiq:** You're building a Ruby-only application, want battle-tested production maturity, and don't need cross-language interop.
+
+**When to choose OJS:** You have a polyglot architecture, want backend flexibility, or need a formal specification for compliance.
+
+### vs BullMQ
+
+[BullMQ](https://bullmq.io) is the leading Redis-backed job queue for Node.js/TypeScript, with rich features and excellent documentation.
+
+| Aspect | OJS | BullMQ |
+|:---|:---|:---|
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | TypeScript/JavaScript (Python via bullmq) |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | Redis only |
+| **Job format** | Standardized envelope | BullMQ-specific JSON |
+| **Flow/workflows** | chain, group, batch | FlowProducer (parent-child DAGs) |
+| **Rate limiting** | Spec-defined per-queue | Built-in per-queue |
+| **Job priority** | Spec-defined | Built-in |
+| **Sandboxed workers** | N/A (process isolation via SDK) | Built-in sandboxed processors |
+| **Metrics** | Prometheus-native | Telemetry events |
+
+**When to choose BullMQ:** You're in a Node.js-first environment, need advanced flow patterns, and want deep Redis integration.
+
+**When to choose OJS:** You need language-agnostic processing, want to avoid Redis lock-in, or need a standardized API across teams.
+
+### vs Celery
+
+[Celery](https://docs.celeryq.dev/) is the de facto standard for distributed task queues in Python, with a large ecosystem and extensive documentation.
+
+| Aspect | OJS | Celery |
+|:---|:---|:---|
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | Python (with limited cross-language via AMQP) |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | RabbitMQ, Redis, SQS |
+| **Job format** | Standardized envelope | Celery-specific message format |
+| **Task discovery** | Explicit registration by job type | Auto-discovery via imports |
+| **Lifecycle** | 8-state formal model | ~5 states (PENDING, STARTED, SUCCESS, FAILURE, RETRY) |
+| **Scheduling** | Built-in cron extension | celery-beat (separate process) |
+| **Canvas** | chain, group, batch | chain, group, chord, starmap |
+| **Configuration** | Per-job and per-queue | Global app config |
+
+**When to choose Celery:** You're building a Python-first application, need advanced canvas patterns, and have an established RabbitMQ infrastructure.
+
+**When to choose OJS:** You need a language-agnostic standard, want typed SDKs in 6 languages, or need formal lifecycle guarantees.
+
+### vs Faktory
+
+[Faktory](https://contribsys.com/faktory/) is a language-agnostic job server created by Mike Perham (the author of Sidekiq).
+
+| Aspect | OJS | Faktory |
+|:---|:---|:---|
+| **Architecture** | Open specification + reference backends | Proprietary server + client SDKs |
+| **Languages** | Go, TypeScript, Python, Java, Rust, Ruby | Go, Ruby, Python, JavaScript/TypeScript |
+| **Backend** | Redis, PostgreSQL, NATS, Kafka, SQS | Redis (built-in) |
+| **Protocol** | HTTP, gRPC, AMQP | Custom TCP protocol |
+| **Specification** | Open, RFC-driven | Closed, single-vendor |
+| **Lifecycle** | 8-state formal model | 5-state (enqueued, working, scheduled, retries, dead) |
+| **Conformance testing** | 194 tests, 5 levels | None |
+| **Deployment** | Any backend, any cloud | Single binary server |
+| **License** | Apache 2.0 | GPL (OSS) / Commercial |
+
+**When to choose Faktory:** You want a simple, self-contained job server with minimal configuration and trust Mike Perham's track record.
+
+**When to choose OJS:** You want an open standard with multiple backends, no vendor lock-in, and formal interoperability guarantees.
+
+### vs Temporal
+
+[Temporal](https://temporal.io) is a durable execution platform for orchestrating complex workflows with full replay semantics.
+
+| Aspect | OJS | Temporal |
+|:---|:---|:---|
+| **Focus** | Background job processing | Durable workflow orchestration |
+| **Complexity** | Simple: enqueue → process | Complex: workflow replay, event sourcing |
+| **Lifecycle** | 8-state job model | Workflow execution states + activity states |
+| **Workflows** | chain, group, batch (primitives) | Full workflow DSL with deterministic replay |
+| **Infrastructure** | Choose your backend | Temporal Server (self-hosted or cloud) |
+| **Learning curve** | Low — familiar job queue patterns | High — requires understanding deterministic constraints |
+| **Best for** | Independent background tasks, fan-out/fan-in | Long-running business processes, sagas, orchestration |
+
+**When to choose Temporal:** You need durable execution with automatic recovery, long-running business workflows, or saga patterns.
+
+**When to choose OJS:** You need simple background job processing, want backend flexibility, or don't need Temporal's workflow complexity.
+
+## Deployment & Infrastructure
+
+| Feature | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Docker images** | ✅ | ❌ (library) | ❌ (library) | ❌ (library) | ✅ | ✅ |
+| **Helm charts** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **Terraform provider** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Kubernetes operator** | ✅ | ❌ | ❌ | ❌ | ✅ (community) | ❌ |
+| **Managed cloud** | ⏳ Planned | ❌ | ❌ | ❌ | ✅ Temporal Cloud | ❌ |
+
+## Licensing & Cost
+
+| Aspect | OJS | Sidekiq | BullMQ | Celery | Temporal | Faktory |
+|:---|:---|:---|:---|:---|:---|:---|
+| **License** | Apache 2.0 | LGPL / Commercial | MIT | BSD-3 | MIT | GPL / Commercial |
+| **Core features** | Free | Free | Free | Free | Free | Free |
+| **Workflows** | Free | $1,950/yr (Pro) | Free | Free | Free | N/A |
+| **Cron + Unique** | Free | $3,950/yr (Ent) | Free | Free/Plugin | Free | Free |
+| **Rate limiting** | Free | $3,950/yr (Ent) | Free | Plugin | Free | N/A |
+| **Managed cloud** | ⏳ [Planned](/governance/roadmap/) | N/A | N/A | N/A | ~$200+/mo | N/A |
+
+<Aside type="tip">
+OJS includes workflows, cron jobs, unique jobs, rate limiting, and middleware in the open-source core — features that competitors charge thousands of dollars per year for.
+</Aside>
 
 ## When to Choose What
 
@@ -225,6 +353,60 @@ OJS:                                 Temporal:
 **OJS** deploys as a single server binary + your choice of datastore.
 **Temporal** requires 4 internal services + 2–3 datastores.
 
+## The OJS Advantage
+
+### 1. Formal specification
+
+OJS is the only background job standard with a formal, RFC-driven specification process. Every behavior is precisely defined using [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) keywords (MUST, SHOULD, MAY), ensuring consistent behavior across all implementations.
+
+### 2. Conformance testing
+
+The [OJS conformance suite](/reference/conformance) includes 194 language-agnostic test cases organized into 5 levels. Any backend claiming OJS compliance can be independently verified — no more "works on my machine" interoperability issues.
+
+### 3. Backend freedom
+
+OJS ships with 5 reference backends today:
+
+| Backend | Best for |
+|:---|:---|
+| **Redis** | Low-latency, high-throughput workloads |
+| **PostgreSQL** | Transactional consistency, existing Postgres infrastructure |
+| **NATS** | Cloud-native, lightweight messaging |
+| **Kafka** | High-throughput streaming, event-driven architectures |
+| **SQS** | AWS-native, serverless, managed infrastructure |
+
+All five pass all 5 conformance levels. Switch between them by changing a connection string — your SDK code stays the same.
+
+### 4. True polyglot
+
+OJS provides first-class SDKs in 6 languages with identical feature sets:
+
+```bash
+# Go
+go get github.com/openjobspec/ojs-go-sdk
+
+# TypeScript / JavaScript
+npm install @openjobspec/sdk
+
+# Python
+pip install openjobspec
+
+# Java
+# Maven Central: org.openjobspec:ojs-sdk
+
+# Rust
+cargo add ojs
+
+# Ruby
+gem install ojs
+```
+
+Every SDK supports: Client, Worker, Workflows (chain/group/batch), Middleware, and Graceful Shutdown.
+
+### 5. Open governance
+
+OJS is developed in the open under [Apache 2.0](https://github.com/openjobspec/openjobspec/blob/main/LICENSE). All specification changes go through a [staged RFC process](/governance/rfc-process) with community review. There is no single vendor that controls the standard.
+
 ## Migration Guides
 
 Already using another framework? We have step-by-step migration guides:
@@ -248,7 +430,7 @@ Key highlights:
 
 ## Further Reading
 
-- [**Feature Comparison →**](/getting-started/feature-comparison/) — Granular feature-by-feature table with detailed breakdowns
 - [**Why Choose OJS? →**](/getting-started/why-ojs/) — Value proposition and pain points OJS solves
 - [**Core Concepts →**](/getting-started/concepts/) — The job envelope, 8-state lifecycle, and operations
 - [**Quickstart →**](/getting-started/quickstart/) — Enqueue your first job in under 2 minutes
+- [**Tutorials →**](/tutorials/your-first-job-go) — Step-by-step guides for each language

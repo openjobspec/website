@@ -1,0 +1,256 @@
+---
+title: "Tutorial: Your First Job in PHP"
+description: Build a complete background job system with PHP from scratch.
+---
+
+This tutorial walks you through building a background job system with the PHP SDK. You will enqueue, process, and monitor a job using PHP — no JavaScript required.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [PHP](https://www.php.net/downloads) 8.2 or later
+- [Composer](https://getcomposer.org/download/)
+
+## Step 1: Start the OJS server
+
+If you haven't already, create a `docker-compose.yml`:
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+```
+
+```bash
+docker compose up -d
+```
+
+## Step 2: Initialize the project
+
+```bash
+mkdir ojs-php-tutorial && cd ojs-php-tutorial
+composer init --name=ojs/tutorial --no-interaction
+composer require openjobspec/ojs-sdk
+```
+
+Your project structure will look like this:
+
+```
+ojs-php-tutorial/
+├── composer.json
+├── vendor/
+├── enqueue.php
+└── worker.php
+```
+
+## Step 3: Enqueue a job
+
+Create `enqueue.php`:
+
+```php
+<?php
+// enqueue.php
+require __DIR__ . '/vendor/autoload.php';
+
+use OJS\Client;
+
+// Create a client pointing to the OJS server
+$client = new Client('http://localhost:8080');
+
+// Enqueue a job of type "email.send" on the "default" queue
+$job = $client->enqueue(
+    'email.send',
+    ['user@example.com', 'welcome'],
+    ['queue' => 'default']
+);
+
+echo sprintf("Enqueued job %s in state: %s\n", $job->id, $job->state);
+```
+
+Run it:
+
+```bash
+php enqueue.php
+```
+
+You should see:
+
+```
+Enqueued job 019461a8-1a2b-7c3d-8e4f-5a6b7c8d9e0f in state: available
+```
+
+## Step 4: Build a worker
+
+Create `worker.php`:
+
+```php
+<?php
+// worker.php
+require __DIR__ . '/vendor/autoload.php';
+
+use OJS\Worker;
+use OJS\JobContext;
+
+// Create a worker that polls the "default" queue
+$worker = new Worker('http://localhost:8080', [
+    'queues'      => ['default'],
+    'concurrency' => 5,
+]);
+
+// Register a handler for "email.send" jobs
+$worker->handle('email.send', function (JobContext $ctx) {
+    $to = $ctx->args[0];
+    $template = $ctx->args[1];
+    echo sprintf("Sending \"%s\" email to %s\n", $template, $to);
+
+    // Your email logic goes here
+});
+
+// Graceful shutdown on Ctrl+C
+if (function_exists('pcntl_signal')) {
+    pcntl_signal(SIGINT, function () use ($worker) {
+        echo "\nShutting down worker...\n";
+        $worker->stop();
+    });
+    pcntl_signal(SIGTERM, function () use ($worker) {
+        echo "\nShutting down worker...\n";
+        $worker->stop();
+    });
+}
+
+echo "Worker started, waiting for jobs...\n";
+$worker->start();
+```
+
+Run the worker:
+
+```bash
+php worker.php
+```
+
+Output:
+
+```
+Worker started, waiting for jobs...
+Sending "welcome" email to user@example.com
+```
+
+## Step 5: Add retry logic
+
+Modify the enqueue call in `enqueue.php` to add a retry policy:
+
+```php
+$job = $client->enqueue(
+    'email.send',
+    ['user@example.com', 'welcome'],
+    [
+        'queue' => 'default',
+        'retry' => [
+            'max_attempts' => 5,
+            'backoff'      => 'exponential',
+        ],
+    ]
+);
+```
+
+If the worker handler throws an exception, the job transitions to `retryable` and is automatically rescheduled with exponential backoff. The delay between attempts increases exponentially: ~1s, ~2s, ~4s, ~8s, ~16s.
+
+You can test this by temporarily throwing in your handler:
+
+```php
+$worker->handle('email.send', function (JobContext $ctx) {
+    if ($ctx->attempt < 3) {
+        throw new \RuntimeException('Simulated failure');
+    }
+    echo sprintf("Succeeded on attempt %d\n", $ctx->attempt);
+});
+```
+
+## Step 6: Add middleware
+
+Add logging and recovery middleware to the worker. First, install a PSR-3 compatible logger:
+
+```bash
+composer require monolog/monolog
+```
+
+Update `worker.php` with the full middleware setup:
+
+```php
+<?php
+// worker.php (updated)
+require __DIR__ . '/vendor/autoload.php';
+
+use OJS\Worker;
+use OJS\JobContext;
+use OJS\Middleware\Recovery;
+use OJS\Middleware\Logging;
+use Monolog\Logger;
+use Monolog\Handler\StreamHandler;
+
+$logger = new Logger('ojs');
+$logger->pushHandler(new StreamHandler('php://stdout'));
+
+$worker = new Worker('http://localhost:8080', [
+    'queues'      => ['default'],
+    'concurrency' => 5,
+]);
+
+// Recovery middleware catches uncaught exceptions and marks jobs as failed
+// instead of crashing the worker process
+$worker->use(new Recovery());
+
+// Logging middleware records job start, completion, duration, and errors
+$worker->use(new Logging($logger));
+
+$worker->handle('email.send', function (JobContext $ctx) {
+    $to = $ctx->args[0];
+    $template = $ctx->args[1];
+    echo sprintf("Sending \"%s\" email to %s\n", $template, $to);
+
+    // Simulate sending an email
+    usleep(100_000);
+});
+
+// Graceful shutdown on Ctrl+C
+if (function_exists('pcntl_signal')) {
+    pcntl_signal(SIGINT, function () use ($worker) {
+        echo "\nShutting down worker...\n";
+        $worker->stop();
+    });
+    pcntl_signal(SIGTERM, function () use ($worker) {
+        echo "\nShutting down worker...\n";
+        $worker->stop();
+    });
+}
+
+echo "Worker started, waiting for jobs...\n";
+$worker->start();
+```
+
+Middleware executes in the order it is registered — `Recovery` wraps the entire pipeline so it can catch exceptions from any inner middleware or handler. `Logging` then records timing for each job.
+
+## What you built
+
+- A **PHP client** that enqueues jobs to an OJS server
+- A **PHP worker** that processes jobs with concurrency and graceful shutdown
+- **Retry policies** for automatic failure recovery
+- **Middleware** for cross-cutting concerns
+
+## Next steps
+
+- Add [workflow orchestration](/tutorials/workflow-patterns/) with chain, group, and batch
+- Explore [scheduled jobs](/spec/scheduling/) for delayed and cron execution
+- See the [PHP SDK reference](https://packagist.org/packages/openjobspec/ojs-sdk) for the full API
+- Run the complete [PHP quickstart example](https://github.com/openjobspec/openjobspec/tree/main/examples/php-quickstart) with Docker Compose

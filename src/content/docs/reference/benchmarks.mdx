@@ -5,14 +5,28 @@ description: "Performance benchmarks, methodology, and historical results for OJ
 
 import { Aside } from '@astrojs/starlight/components';
 
-OJS publishes reproducible performance benchmarks for all backends. Results are generated automatically in CI and tracked over time to detect regressions.
+OJS publishes reproducible performance benchmarks for all backends. Results are generated automatically in CI and tracked over time to detect regressions. This page covers reference results, methodology, interpretation guidance, and instructions for running benchmarks yourself.
 
-## Latest Results
+## Reference Results (v0.1.0)
 
-Benchmark results are published on every push to `main` and on a weekly schedule (Sundays at 2am UTC).
+The following table shows representative throughput numbers from the v0.1.0 release, measured on GitHub Actions CI runners. These serve as a baseline for tracking improvements over time.
 
-- **[Latest benchmark artifacts](https://github.com/openjobspec/openjobspec/actions/workflows/benchmarks.yml)** — download raw results and generated reports from the most recent workflow run
-- **[Historical trends](https://openjobspec.github.io/openjobspec/dev/bench/)** — interactive charts tracking performance over time (powered by [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark))
+| Operation | Lite (ops/sec) | Redis (ops/sec) | PostgreSQL (ops/sec) |
+|-----------|---------------:|-----------------:|---------------------:|
+| **Enqueue** | 40,233 | 15,741 | 8,410 |
+| **Fetch** | 30,947 | 12,701 | 6,716 |
+| **Round-trip** | 12,093 | 4,779 | 2,635 |
+
+<Aside type="note">
+  These numbers reflect single-threaded throughput on CI hardware. Local machines with faster CPUs and SSDs will typically see higher numbers. Use these as a relative baseline, not as absolute guarantees.
+</Aside>
+
+The **Lite** backend serves as the upper-bound baseline — it runs entirely in-process with no network or storage overhead. The gap between Lite and Redis/PostgreSQL reflects the cost of real storage I/O and network round-trips.
+
+**Key takeaways from v0.1.0:**
+- Redis achieves roughly **2–3×** the throughput of PostgreSQL across all operations
+- The Lite backend is roughly **2.5–4.5×** faster than Redis, showing the cost of network + storage
+- Round-trip (enqueue → fetch → ack) is the most demanding operation, as expected
 
 ## Operations Benchmarked
 
@@ -43,17 +57,76 @@ Benchmark results are published on every push to `main` and on a weekly schedule
 | **PostgreSQL** | PostgreSQL 16+ | SKIP LOCKED dequeue, LISTEN/NOTIFY, production-grade |
 | **Go SDK** | Client library | Measures SDK overhead separately from backend |
 
+## How to Interpret Results
+
+Understanding what the numbers mean is as important as the numbers themselves.
+
+### Throughput (ops/sec)
+
+- **Higher ops/sec = better.** This is the primary throughput metric.
+- ops/sec is derived from the Go benchmark's ns/op measurement: `ops/sec = 1,000,000,000 / ns_per_op`.
+- The **Lite** backend represents the theoretical ceiling — it runs in-process with no network or storage overhead.
+
+### Comparing Backends
+
+- **Redis vs PostgreSQL tradeoff:** Redis is faster for pure throughput; PostgreSQL offers stronger transactional guarantees and durability.
+- **Round-trip is the most realistic benchmark** — it measures the full lifecycle (enqueue → fetch → ack) that a real application would exercise.
+- **Network overhead is always included.** Every benchmark operation is a full HTTP round-trip to reflect real-world deployment patterns, not just a function call.
+
+### Memory Metrics
+
+- **B/op** (bytes per operation) measures how much memory is allocated during each operation. Lower is better.
+- **allocs/op** (allocations per operation) counts the number of heap allocations. Fewer allocations means less GC pressure and more predictable latency.
+- These metrics are especially useful for detecting memory regressions in the SDK and serialization layers.
+
+<Aside type="tip">
+  When evaluating benchmarks, focus on **relative differences** between backends and **trends over time**, rather than absolute numbers from a single run.
+</Aside>
+
 ## Methodology
 
-- **Runtime**: Ubuntu latest runners on GitHub Actions (consistent hardware)
-- **Go benchmark framework**: Standard `testing.B` with `-benchmem`
-- **Iterations**: `-count=5` for statistical significance
-- **Timer reset**: `b.ResetTimer()` after setup to exclude initialization
-- **Network overhead**: Included (HTTP round-trip) to reflect real-world usage
-- **Concurrency**: `b.RunParallel()` with `GOMAXPROCS` goroutines
+All benchmarks follow a rigorous, reproducible process.
+
+### Framework & Configuration
+
+- **Go benchmark framework**: Standard `testing.B` with `-benchmem` to capture allocation metrics
+- **Iterations**: `-count=5` for each benchmark to ensure statistical significance
+- **Timer reset**: `b.ResetTimer()` is called after setup to exclude initialization costs (server startup, database seeding) from the measurement
+- **Parallel benchmarks**: Use `b.RunParallel()` with `GOMAXPROCS` goroutines to measure concurrent throughput
+
+### What Gets Measured
+
+- Each operation is a **full HTTP round-trip** — the benchmark client sends an HTTP request to the OJS server and waits for the response. This includes JSON serialization, network I/O, server-side processing, and storage I/O.
+- Backends start with a **clean state** before each benchmark suite. This means no pre-existing jobs, no warmed caches, and no leftover state from previous runs.
+- The benchmark binary and the OJS server run as **separate processes**, connected over localhost HTTP — matching how OJS is deployed in production.
+
+### Statistical Approach
+
+- Running with `-count=5` produces 5 independent measurements for each benchmark.
+- The CI pipeline uses [benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat) to compute means and detect statistically significant changes between runs.
+- Outliers from CI runner variability (noisy neighbors, GC pauses) are smoothed out by the multiple iterations.
 
 <Aside type="caution">
   Benchmark results are machine-specific. Use relative comparisons between backends, not absolute numbers. CI runners may vary slightly between runs.
+</Aside>
+
+## Environment & Hardware
+
+Benchmarks run in a controlled CI environment to maximize reproducibility.
+
+| Parameter | Value |
+|-----------|-------|
+| **CI Platform** | GitHub Actions, Ubuntu latest runners |
+| **CPU** | 2-core (x86_64) |
+| **RAM** | 7 GB |
+| **Go Version** | 1.22+ |
+| **Redis** | 7+ (Docker container) |
+| **PostgreSQL** | 16+ (Docker container) |
+| **Network** | Loopback (localhost) — no real network latency |
+| **Docker** | Used for Redis and PostgreSQL backends |
+
+<Aside type="note">
+  GitHub Actions runners use shared hardware. While this introduces some variance between runs, the `-count=5` iterations and statistical analysis help mitigate this. For the most stable results, run benchmarks on dedicated hardware.
 </Aside>
 
 ## Regression Detection
@@ -122,6 +195,47 @@ The JSON report includes structured data for each benchmark result, cross-backen
 | `OJS_BENCH_URL` | `http://localhost:8080` | Target server URL |
 | `OJS_BENCH_API_KEY` | _(empty)_ | API key for authenticated endpoints |
 
+## Comparison Context
+
+OJS backends use the same proven patterns as widely-adopted job processing systems, but exposed through a standardized protocol.
+
+### Redis Backend
+
+The OJS Redis backend uses **Lua scripts for atomic multi-key operations** — the same approach used by Sidekiq (Ruby), BullMQ (Node.js), and other Redis-based job queues. This ensures that complex operations like enqueue-with-dedup or fetch-and-lock execute atomically without distributed locking.
+
+Performance characteristics are comparable to other Redis-backed job systems operating over HTTP, though direct comparison is difficult due to differing protocols (OJS uses HTTP/gRPC while others use native Redis protocol or language-specific drivers).
+
+### PostgreSQL Backend
+
+The OJS PostgreSQL backend uses **`SELECT ... FOR UPDATE SKIP LOCKED`** for non-blocking job dequeue — the same pattern used by Postgres-based queues like Graphile Worker, Oban (Elixir), and good_job (Ruby). It also uses `LISTEN/NOTIFY` for real-time push notifications to waiting workers, reducing polling overhead.
+
+PostgreSQL trades some raw throughput for **stronger durability guarantees**: jobs survive crashes, support transactional enqueue (enqueue within an application transaction), and benefit from PostgreSQL's mature replication and backup ecosystem.
+
+### Why Direct Comparisons Are Difficult
+
+- **Protocol differences**: OJS operates over HTTP/gRPC, while many job systems use language-native drivers or custom protocols
+- **Feature differences**: OJS implements a full 8-state lifecycle with middleware, workflows, and extensions — not all competitors offer the same feature set
+- **Measurement differences**: Some systems benchmark at the library level (function calls), while OJS benchmarks at the protocol level (HTTP round-trips)
+
+Despite these differences, OJS throughput is competitive with production-grade job systems, and the standardized protocol enables multi-language interoperability that language-specific systems cannot offer.
+
+### Performance Optimization Tips
+
+If you need to maximize throughput in production:
+
+- **Use batch enqueue** (`EnqueueBatch`) for bulk inserts — amortizes HTTP and storage overhead across many jobs
+- **Tune worker concurrency** — increase `GOMAXPROCS` and worker pool size to match available CPU cores
+- **Co-locate workers with the backend** — minimize network latency by deploying workers in the same region or availability zone as your Redis/PostgreSQL instance
+- **Monitor allocs/op** — high allocation counts lead to GC pressure, which causes latency spikes under load
+- **Consider the Lite backend for testing** — it eliminates storage overhead entirely, making it ideal for integration tests and local development
+
+## Latest Results & Trends
+
+Benchmark results are published on every push to `main` and on a weekly schedule (Sundays at 2am UTC).
+
+- **[Latest benchmark artifacts](https://github.com/openjobspec/openjobspec/actions/workflows/benchmarks.yml)** — download raw results and generated reports from the most recent workflow run
+- **[Historical trends](https://openjobspec.github.io/openjobspec/dev/bench/)** — interactive charts tracking performance over time (powered by [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark))
+
 ## CI Workflow
 
 The benchmark workflow (`.github/workflows/benchmarks.yml`) runs:
@@ -132,3 +246,7 @@ The benchmark workflow (`.github/workflows/benchmarks.yml`) runs:
 - On pull requests that modify backend or SDK code
 
 Results are uploaded as artifacts with 90-day retention and published to the `benchmarks` branch for trend tracking.
+
+<Aside type="tip">
+  You can trigger a benchmark run manually from the [Actions tab](https://github.com/openjobspec/openjobspec/actions/workflows/benchmarks.yml) using the "Run workflow" button. This is useful for verifying performance before merging a large change.
+</Aside>

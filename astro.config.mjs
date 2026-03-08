@@ -25,10 +25,8 @@ export default defineConfig({
           items: [
             { label: 'Quickstart', slug: 'getting-started/quickstart' },
             { label: 'Core Concepts', slug: 'getting-started/concepts' },
-            { label: 'Why OJS?', slug: 'getting-started/comparison' },
+            { label: 'Comparisons', slug: 'getting-started/comparisons' },
             { label: 'Why Choose OJS?', slug: 'getting-started/why-ojs' },
-            { label: 'Feature Comparison', slug: 'getting-started/feature-comparison' },
-            { label: 'OJS vs Competitors', slug: 'getting-started/comparisons' },
             { label: 'Migration Calculator', slug: 'getting-started/migration-calculator' },
           ],
         },
@@ -112,6 +110,14 @@ export default defineConfig({
             {
               label: 'Your First Job (Ruby)',
               slug: 'tutorials/your-first-job-ruby',
+            },
+            {
+              label: 'Your First Job (PHP)',
+              slug: 'tutorials/your-first-job-php',
+            },
+            {
+              label: 'Your First Job (.NET)',
+              slug: 'tutorials/your-first-job-dotnet',
             },
             {
               label: 'Workflow Patterns',

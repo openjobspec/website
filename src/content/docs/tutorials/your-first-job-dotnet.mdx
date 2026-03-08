@@ -1,0 +1,252 @@
+---
+title: "Tutorial: Your First Job in .NET"
+description: Build a complete background job system with C# and .NET from scratch.
+---
+
+This tutorial walks you through building a background job system with the .NET SDK. You will enqueue, process, and monitor a job using C# — no JavaScript required.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) or later
+
+## Step 1: Start the OJS server
+
+If you haven't already, create a `docker-compose.yml`:
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+```
+
+```bash
+docker compose up -d
+```
+
+## Step 2: Initialize the project
+
+```bash
+mkdir ojs-dotnet-tutorial && cd ojs-dotnet-tutorial
+dotnet new console
+dotnet add package OpenJobSpec.Sdk
+```
+
+## Step 3: Enqueue a job
+
+Replace the contents of `Program.cs`:
+
+```csharp
+// Program.cs
+using OpenJobSpec.Sdk;
+
+// Create a client pointing to the OJS server
+var client = new OJSClient("http://localhost:8080");
+
+// Enqueue a job of type "email.send" on the "default" queue
+var job = await client.EnqueueAsync(
+    "email.send",
+    new object[] { "user@example.com", "welcome" },
+    new EnqueueOptions { Queue = "default" }
+);
+
+Console.WriteLine($"Enqueued job {job.Id} in state: {job.State}");
+```
+
+Run it:
+
+```bash
+dotnet run
+```
+
+You should see:
+
+```
+Enqueued job 019461a8-1a2b-7c3d-8e4f-5a6b7c8d9e0f in state: available
+```
+
+## Step 4: Build a worker
+
+Create a second project for the worker:
+
+```bash
+mkdir ../ojs-dotnet-worker && cd ../ojs-dotnet-worker
+dotnet new console
+dotnet add package OpenJobSpec.Sdk
+```
+
+Replace the contents of `Program.cs`:
+
+```csharp
+// Program.cs
+using OpenJobSpec.Sdk;
+
+// Create a worker that polls the "default" queue
+var worker = new OJSWorker(
+    "http://localhost:8080",
+    new WorkerOptions
+    {
+        Queues = new[] { "default" },
+        Concurrency = 5
+    }
+);
+
+// Register a handler for "email.send" jobs
+worker.Handle("email.send", async (JobContext ctx) =>
+{
+    var to = (string)ctx.Args[0];
+    var template = (string)ctx.Args[1];
+    Console.WriteLine($"Sending \"{template}\" email to {to}");
+
+    // Your email logic goes here
+    await Task.CompletedTask;
+});
+
+// Graceful shutdown on Ctrl+C
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Console.WriteLine("\nShutting down worker...");
+    cts.Cancel();
+};
+
+Console.WriteLine("Worker started, waiting for jobs...");
+await worker.StartAsync(cts.Token);
+```
+
+Run the worker:
+
+```bash
+dotnet run
+```
+
+Output:
+
+```
+Worker started, waiting for jobs...
+Sending "welcome" email to user@example.com
+```
+
+## Step 5: Add retry logic
+
+Modify the enqueue call in the client project to add a retry policy:
+
+```csharp
+var job = await client.EnqueueAsync(
+    "email.send",
+    new object[] { "user@example.com", "welcome" },
+    new EnqueueOptions
+    {
+        Queue = "default",
+        Retry = new RetryPolicy
+        {
+            MaxAttempts = 5,
+            Backoff = BackoffType.Exponential
+        }
+    }
+);
+```
+
+If the worker handler throws an exception, the job transitions to `retryable` and is automatically rescheduled with exponential backoff. The delay between attempts increases exponentially: ~1s, ~2s, ~4s, ~8s, ~16s.
+
+You can test this by temporarily throwing in your handler:
+
+```csharp
+worker.Handle("email.send", async (JobContext ctx) =>
+{
+    if (ctx.Attempt < 3)
+    {
+        throw new InvalidOperationException("Simulated failure");
+    }
+    Console.WriteLine($"Succeeded on attempt {ctx.Attempt}");
+    await Task.CompletedTask;
+});
+```
+
+## Step 6: Add middleware
+
+Add logging and recovery middleware to the worker. First, add the logging package:
+
+```bash
+dotnet add package Microsoft.Extensions.Logging.Console
+```
+
+Update `Program.cs` with the full middleware setup:
+
+```csharp
+// Program.cs (updated)
+using OpenJobSpec.Sdk;
+using OpenJobSpec.Sdk.Middleware;
+using Microsoft.Extensions.Logging;
+
+var loggerFactory = LoggerFactory.Create(builder =>
+    builder.AddConsole()
+);
+var logger = loggerFactory.CreateLogger<Program>();
+
+var worker = new OJSWorker(
+    "http://localhost:8080",
+    new WorkerOptions
+    {
+        Queues = new[] { "default" },
+        Concurrency = 5
+    }
+);
+
+// Recovery middleware catches unhandled exceptions and marks jobs as failed
+// instead of crashing the worker process
+worker.Use(new RecoveryMiddleware());
+
+// Logging middleware records job start, completion, duration, and errors
+worker.Use(new LoggingMiddleware(logger));
+
+worker.Handle("email.send", async (JobContext ctx) =>
+{
+    var to = (string)ctx.Args[0];
+    var template = (string)ctx.Args[1];
+    Console.WriteLine($"Sending \"{template}\" email to {to}");
+
+    // Simulate sending an email
+    await Task.Delay(100);
+});
+
+// Graceful shutdown on Ctrl+C
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Console.WriteLine("\nShutting down worker...");
+    cts.Cancel();
+};
+
+Console.WriteLine("Worker started, waiting for jobs...");
+await worker.StartAsync(cts.Token);
+```
+
+Middleware executes in the order it is registered — `RecoveryMiddleware` wraps the entire pipeline so it can catch exceptions from any inner middleware or handler. `LoggingMiddleware` then records timing for each job.
+
+## What you built
+
+- A **C# client** that enqueues jobs to an OJS server
+- A **.NET worker** that processes jobs with concurrency and graceful shutdown
+- **Retry policies** for automatic failure recovery
+- **Middleware** for cross-cutting concerns
+
+## Next steps
+
+- Add [workflow orchestration](/tutorials/workflow-patterns/) with chain, group, and batch
+- Explore [scheduled jobs](/spec/scheduling/) for delayed and cron execution
+- See the [.NET SDK reference](https://www.nuget.org/packages/OpenJobSpec.Sdk) for the full API
+- Run the complete [.NET quickstart example](https://github.com/openjobspec/openjobspec/tree/main/examples/dotnet-quickstart) with Docker Compose

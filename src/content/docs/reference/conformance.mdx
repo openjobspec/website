@@ -3,27 +3,165 @@ title: "Conformance"
 description: "Conformance levels, tiers, test methodology, and badge program"
 ---
 
-The conformance specification defines five levels, three tiers, and a test methodology for validating OJS backend implementations. Conformance ensures interoperability across backends and SDKs.
+import { Aside } from '@astrojs/starlight/components';
+
+The conformance specification defines **five levels**, **three tiers**, and a comprehensive test methodology for validating OJS backend implementations. With **220 tests** across levels and **87 extension tests**, conformance ensures interoperability across backends and SDKs.
+
+<Aside type="tip">
+  Start with Level 0 and work upward. Each level is a strict superset of the previous — you cannot skip levels.
+</Aside>
 
 ## Conformance Levels
 
-Each level is a superset of the previous:
+Each level builds on the previous. A backend **MUST** pass all tests from lower levels before claiming a higher level.
 
-| Level | Name | Key Requirements |
-|-------|------|-----------------|
-| 0 | Core | Enqueue (PUSH), fetch (FETCH), acknowledge (ACK), fail (FAIL/NACK), health check, queue listing |
-| 1 | Lifecycle | Job info, cancel, dead letter, heartbeat, state transitions, worker registration |
-| 2 | Scheduling | Delayed jobs (`scheduled_at`), cron job registration, timezone handling, overlap policies |
-| 3 | Orchestration | Chain (sequential), group (parallel fan-out/fan-in), batch (parallel with callbacks) |
-| 4 | Advanced | Batch enqueue, unique jobs, priority ordering, queue pause/resume, queue stats, rate limiting |
+| Level | Name | Tests | Key Requirements |
+|-------|------|-------|-----------------|
+| 0 | Core | 65 | Enqueue, dequeue, execute, succeed/fail, 8-state lifecycle, JSON wire format |
+| 1 | Reliable | 25 | At-least-once delivery, retry with backoff, dead letter queue, heartbeat, cancellation |
+| 2 | Scheduled | 13 | Delayed execution, cron/periodic jobs, job expiration, timezone-aware scheduling |
+| 3 | Orchestration | 14 | Chain (sequential), group (parallel), batch (callbacks), data passing, workflow events |
+| 4 | Advanced | 16 | Priority queues, unique jobs, batch enqueue, queue pause/resume, stats, rate limiting |
+
+### Level 0 — Core (65 tests)
+
+Level 0 is the minimum viable OJS backend. It validates the foundational operations every implementation must support:
+
+- **Job envelope**: The 5 required fields — `specversion`, `id`, `type`, `queue`, `args`
+- **Enqueue** (PUSH): Create jobs with proper validation and UUIDv7 ID generation
+- **Fetch** (FETCH): Dequeue jobs for processing with state transition to `active`
+- **Acknowledge** (ACK): Mark jobs as `completed` after successful processing
+- **Fail** (FAIL/NACK): Mark jobs as `retryable` or `discarded` on failure
+- **8-state lifecycle**: `scheduled → available → pending → active → completed/retryable/cancelled/discarded`
+- **JSON wire format**: `application/openjobspec+json` content type, RFC 3339 timestamps in UTC
+- **Basic events**: Job state change notifications
+- **Middleware chains**: Request/response middleware with `next()` pattern
+- **Error responses**: Proper HTTP status codes (400, 404, 409, 422)
+
+The minimum API surface for Level 0:
+
+1. `POST /ojs/v1/jobs` — Enqueue a job
+2. `POST /ojs/v1/jobs/fetch` — Fetch jobs for processing
+3. `POST /ojs/v1/jobs/{id}/ack` — Acknowledge success
+4. `POST /ojs/v1/jobs/{id}/fail` — Report failure
+5. `GET /ojs/v1/health` — Health check
+6. `GET /ojs/v1/queues` — List queues
+
+### Level 1 — Reliable (25 tests)
+
+Level 1 adds reliability guarantees on top of core operations:
+
+- **At-least-once delivery**: Jobs are re-delivered if not acknowledged within the visibility timeout
+- **Retry with configurable backoff**: `max_attempts`, `initial_interval`, `backoff_coefficient`, `max_interval`, `jitter`
+- **Dead letter queue**: Jobs that exceed `max_attempts` move to a dead letter queue for inspection
+- **Heartbeat** (BEAT): Workers send periodic heartbeats to extend visibility timeout on long-running jobs
+- **Visibility timeout**: Configurable per-job timeout before automatic redelivery
+- **Job cancellation** (CANCEL): Cancel a job in any non-terminal state, transitioning to `cancelled`
+- **Job info retrieval** (INFO): Query current state and metadata of any job by ID
+
+### Level 2 — Scheduled (13 tests)
+
+Level 2 introduces time-based job scheduling:
+
+- **Delayed execution** (`scheduled_at`): Jobs enter the `scheduled` state and become `available` at the specified time
+- **Cron/periodic jobs**: 5-field cron expressions with IANA timezone support (e.g., `America/New_York`)
+- **Job expiration**: `expires_at` timestamp and TTL-based expiration for automatic cleanup
+- **Timezone-aware scheduling**: Correct handling of DST transitions — jobs scheduled across a DST boundary fire at the correct local time
+
+### Level 3 — Orchestration (14 tests)
+
+Level 3 adds workflow primitives for composing jobs:
+
+- **Chain**: Sequential execution where each job receives the previous job's result as input — data flows through the `result` field
+- **Group**: Concurrent fan-out execution of multiple jobs in parallel
+- **Batch**: Group execution with callbacks — `on_complete` (always), `on_success` (all succeed), `on_failure` (any fail)
+- **Data passing**: Results from completed jobs are passed via the `result` field to downstream jobs or callbacks
+- **Workflow lifecycle events**: Events emitted for workflow-level state changes (started, completed, failed)
+
+### Level 4 — Advanced (16 tests)
+
+Level 4 covers production-grade operational features:
+
+- **Priority queues**: Jobs dequeued in priority order — `HIGH` (3), `NORMAL` (2), `LOW` (1)
+- **Unique jobs / deduplication**: Configurable uniqueness by `type`, `queue`, `args`, or any combination
+- **Batch enqueue**: Accept ≥1,000 jobs per request for high-throughput ingestion
+- **Queue pause/resume**: Pause a queue to stop dequeuing without losing jobs; resume to continue
+- **Queue statistics**: Job counts by state, throughput metrics, queue depth
+- **Rate limiting**: Configurable per-queue rate limits for downstream protection
+
+### Extension Tests (87 tests)
+
+Beyond the five levels, **87 additional tests** validate extension-specific behavior. Extensions are optional capabilities that backends may implement:
+
+- **Retry extension**: Advanced retry policies, custom backoff strategies, per-error-type retry rules
+- **Workflows extension**: Complex workflow graphs, conditional branching, sub-workflows
+- **Unique jobs extension**: Deduplication window configuration, uniqueness key strategies
+- **Cron extension**: Cron expression edge cases, overlap policies, timezone transitions
+- **Events extension**: Event streaming, filtering, delivery guarantees
+- **Middleware extension**: Custom middleware chains, ordering, error handling
+
+## Test Summary
+
+| Category | Tests |
+|----------|-------|
+| Level 0 — Core | 65 |
+| Level 1 — Reliable | 25 |
+| Level 2 — Scheduled | 13 |
+| Level 3 — Orchestration | 14 |
+| Level 4 — Advanced | 16 |
+| **Level Total** | **133** |
+| Extensions | 87 |
+| **Grand Total** | **220** |
 
 ## Conformance Tiers
+
+Each level can be validated at three tiers of rigor:
 
 | Tier | Scope | Description |
 |------|-------|-------------|
 | Parser | Data validation | Validates job envelope parsing, error responses, and schema compliance |
 | Runtime | Behavioral | Validates state transitions, timing, retries, and lifecycle behavior |
 | Full | Complete | Parser + Runtime + performance and stress requirements |
+
+## Badge Program
+
+The OJS badge program provides a standardized way to communicate a backend's conformance status.
+
+### Tier Definitions
+
+| Badge | Levels Required | Description |
+|-------|----------------|-------------|
+| 🥉 **Bronze** | Level 0–1 | Core operations and reliability guarantees |
+| 🥈 **Silver** | Level 0–2 | Bronze + scheduling capabilities |
+| 🥇 **Gold** | Level 0–4 | Full conformance across all levels |
+
+Badge format: **"OJS Conformant Level \{N\} (\{Tier\})"** — for example, *"OJS Conformant Level 4 (Gold)"*.
+
+### Requirements
+
+To display a conformance badge, a backend **MUST**:
+
+1. **Pass the complete test suite** for all claimed levels at the declared tier
+2. **Include a conformance manifest** at `GET /ojs/manifest` (see below)
+3. **Reference the test suite version** used for validation
+
+<Aside type="caution">
+  Badges are automatically **revoked** if not re-tested within **90 days** of a new conformance test suite release. Keep your implementation current with the latest spec.
+</Aside>
+
+## Backend Conformance Status
+
+All seven reference backends pass **Levels 0–4** and hold **Gold** status:
+
+| Backend | Stack | Level | Badge |
+|---------|-------|-------|-------|
+| `ojs-backend-redis` | Go + Redis 7+ | 4 | 🥇 Gold |
+| `ojs-backend-postgres` | Go + PostgreSQL 16+ | 4 | 🥇 Gold |
+| `ojs-backend-nats` | Go + NATS | 4 | 🥇 Gold |
+| `ojs-backend-kafka` | Go + Kafka | 4 | 🥇 Gold |
+| `ojs-backend-sqs` | Go + AWS SQS | 4 | 🥇 Gold |
+| `ojs-backend-lite` | Go (in-process) | 4 | 🥇 Gold |
+| `ojs-backend-memory` | Go (in-memory) | 4 | 🥇 Gold |
 
 ## Conformance Manifest
 
@@ -47,6 +185,8 @@ curl http://localhost:8080/ojs/manifest
   ]
 }
 ```
+
+The manifest endpoint (`GET /ojs/manifest`) is required for all conformant backends and is itself validated as part of the Level 0 test suite.
 
 ## Test Suite
 
@@ -76,6 +216,26 @@ The conformance test suite (`ojs-conformance/`) contains language-agnostic JSON 
 }
 ```
 
+### Standard Test Handlers
+
+The conformance suite relies on a set of standard test handlers that every backend must register. These handlers have deterministic behavior to enable reliable assertions:
+
+| Handler | Behavior |
+|---------|----------|
+| `test.echo` | Returns the job's arguments as the result |
+| `test.fail_once` | Fails on the 1st attempt, succeeds on the 2nd |
+| `test.fail_twice` | Fails on the 1st and 2nd attempts, succeeds on the 3rd |
+| `test.fail_always` | Always fails with a retryable error |
+| `test.slow` | Sleeps for a configured duration, then succeeds |
+| `test.timeout` | Runs longer than the configured job timeout |
+| `test.panic` | Simulates a worker crash (unclean exit) |
+| `test.produce` | Returns a configurable result payload |
+| `test.noop` | Succeeds immediately with no result |
+
+<Aside type="note">
+  All test handlers use the `test.*` namespace. Your backend's worker process must register these handlers before the conformance suite can run.
+</Aside>
+
 ### Running Tests
 
 ```bash
@@ -87,9 +247,15 @@ OJS_URL=http://localhost:8080 go test ./runner/http/ -v
 cd ojs-backend-redis
 make conformance                # All levels
 make conformance-level-0        # Just Level 0
+
+# Run a specific level against any server
+cd ojs-conformance
+OJS_URL=http://localhost:8080 go test ./runner/http/ -v -run "Level2"
 ```
 
 ### Validation Matchers
+
+The test runner supports these assertion matchers for response validation:
 
 | Matcher | Description |
 |---------|-------------|
@@ -100,20 +266,35 @@ make conformance-level-0        # Just Level 0
 | `contains` | Array contains value |
 | `within` | Timing assertion (value within tolerance) |
 
-## Level 0 Requirements
-
-The minimum viable OJS backend must support:
-
-1. `POST /ojs/v1/jobs` — Enqueue a job
-2. `POST /ojs/v1/jobs/fetch` — Fetch jobs for processing
-3. `POST /ojs/v1/jobs/{id}/ack` — Acknowledge success
-4. `POST /ojs/v1/jobs/{id}/fail` — Report failure
-5. `GET /ojs/v1/health` — Health check
-6. `GET /ojs/v1/queues` — List queues
-7. Proper error responses (400, 404, 409, 422)
-8. UUIDv7 job IDs
-9. RFC 3339 timestamps in UTC
-
 ## Building a Conformant Backend
 
-Start with Level 0 and work up. The conformance tests serve as both specification and acceptance criteria. See the [Implement a Backend](/guides/implement-a-backend/) guide for a step-by-step walkthrough.
+Building a new OJS-conformant backend is a structured, incremental process. Follow these steps:
+
+### 1. Implement Level 0 Endpoints
+
+Start with the six core endpoints (PUSH, FETCH, ACK, FAIL, health, queues). Validate proper error responses and UUIDv7 generation.
+
+### 2. Register Standard Test Handlers
+
+Your worker process must register all `test.*` handlers listed above. These are the only job types the conformance suite will enqueue.
+
+### 3. Run the Conformance Suite
+
+Start your backend server, then run the test suite against it:
+
+```bash
+cd ojs-conformance
+OJS_URL=http://localhost:YOUR_PORT go test ./runner/http/ -v -run "Level0"
+```
+
+### 4. Work Up Through Levels
+
+Once Level 0 passes, implement Level 1 features (retry, heartbeat, cancellation) and run those tests. Continue incrementally through each level.
+
+### 5. Add the Conformance Manifest
+
+Implement `GET /ojs/manifest` returning your supported level, tier, and extensions. This endpoint is validated as part of the test suite.
+
+### 6. Claim Your Badge
+
+Once all target levels pass, you can display the corresponding conformance badge. See the [Implement a Backend](/guides/implement-a-backend/) guide for a complete step-by-step walkthrough.
