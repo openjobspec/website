@@ -75,3 +75,4 @@ Page content here.
 ```
 
 The sidebar is configured in `astro.config.mjs` under the Starlight `sidebar` option.
+
