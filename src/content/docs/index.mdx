@@ -66,9 +66,9 @@ worker.Start(context.Background())
 docker run -p 8080:8080 ghcr.io/openjobspec/ojs-lite:latest
 
 # 2. Enqueue a job
-curl -X POST http://localhost:8080/v1/jobs \
+curl -X POST http://localhost:8080/ojs/v1/jobs \
   -H "Content-Type: application/json" \
-  -d '{"type":"email.send","args":["user@example.com","welcome"]}'
+  -d '{"type":"email.send","args":["user@example.com","welcome"],"queue":"default"}'
 
 # → {"id":"01957abc-def0-7abc-...","state":"available"}
 
@@ -96,7 +96,7 @@ npm install @openjobspec/sdk
   </div>
   <div class="card">
     <h3>Language-agnostic</h3>
-    <p>A Python service can enqueue a job that a Go worker processes. Six official SDKs cover the most popular languages, and the spec is simple enough to implement in a weekend.</p>
+    <p>A Python service can enqueue a job that a Go worker processes. Eight official SDKs cover the most popular languages, and the spec is simple enough to implement in a weekend.</p>
   </div>
   <div class="card">
     <h3>Battle-tested design</h3>
@@ -114,7 +114,7 @@ npm install @openjobspec/sdk
 
 ## Choose your backend
 
-Both official backends support all five conformance levels and are production-ready.
+All seven reference backends support all five conformance levels and are production-ready.
 
 <BackendComparison />
 

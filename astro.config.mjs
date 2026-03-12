@@ -11,6 +11,20 @@ export default defineConfig({
       title: 'Open Job Spec',
       description:
         'A universal, language-agnostic standard for background job processing.',
+      head: [
+        {
+          tag: 'meta',
+          attrs: { property: 'og:type', content: 'website' },
+        },
+        {
+          tag: 'meta',
+          attrs: { property: 'og:site_name', content: 'Open Job Spec' },
+        },
+        {
+          tag: 'meta',
+          attrs: { name: 'twitter:card', content: 'summary' },
+        },
+      ],
       social: [
         {
           icon: 'github',
