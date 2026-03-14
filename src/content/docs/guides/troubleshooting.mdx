@@ -1,0 +1,425 @@
+---
+title: Troubleshooting Guide
+description: Diagnose and resolve common OJS issues including connection errors, stuck jobs, performance problems, and backend-specific debugging.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide helps you diagnose and resolve common issues with OJS servers, SDKs, and backends. Start with the [health check](#health-check) section, then find your specific issue below.
+
+## Health check
+
+Always start by verifying the server is running and the backend is connected:
+
+```bash
+curl http://localhost:8080/ojs/v1/health
+```
+
+**Healthy response:**
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0-rc.1",
+  "uptime_seconds": 86400,
+  "backend": {
+    "type": "redis",
+    "status": "connected",
+    "latency_ms": 2
+  }
+}
+```
+
+If the health check fails, see [Connection issues](#connection-issues).
+
+---
+
+## Common error codes
+
+| HTTP Status | Error Code | Cause | Solution |
+|-------------|-----------|-------|----------|
+| 400 | `BAD_REQUEST` | Malformed JSON or missing fields | Check the request body — `type` is required for job creation |
+| 401 | `UNAUTHORIZED` | Missing or invalid API key | Verify the `Authorization: Bearer` header |
+| 403 | `FORBIDDEN` | Insufficient RBAC permissions | Check the role assigned to your API key |
+| 404 | `NOT_FOUND` | Resource does not exist | Verify the job ID or queue name |
+| 409 | `CONFLICT` | Invalid state transition or duplicate | Job may have already been cancelled or completed |
+| 422 | `VALIDATION_ERROR` | Semantic validation failure | Check field values (e.g., priority must be 1–4) |
+| 429 | `RATE_LIMITED` | Too many requests | Back off and retry; check rate limit headers |
+| 500 | `INTERNAL_ERROR` | Server-side failure | Check server logs for the `request_id` |
+| 503 | `SERVICE_UNAVAILABLE` | Backend unreachable | Verify backend connectivity (Redis, Postgres, etc.) |
+
+For the full error catalog, see the [Error Codes reference](/reference/error-codes/).
+
+---
+
+## Connection issues
+
+### Server won't start
+
+**Symptom:** The OJS server exits immediately or logs a connection error on startup.
+
+**Checklist:**
+
+1. **Backend not running** — Ensure your backend (Redis, PostgreSQL, NATS, etc.) is running and accessible:
+
+<Tabs>
+  <TabItem label="Redis">
+    ```bash
+    redis-cli ping
+    # Expected: PONG
+    ```
+  </TabItem>
+  <TabItem label="PostgreSQL">
+    ```bash
+    pg_isready -h localhost -p 5432
+    # Expected: accepting connections
+    ```
+  </TabItem>
+  <TabItem label="NATS">
+    ```bash
+    nats server check connection
+    # Or: curl http://localhost:8222/healthz
+    ```
+  </TabItem>
+</Tabs>
+
+2. **Wrong connection string** — Verify environment variables:
+
+    ```bash
+    # Redis
+    echo $REDIS_URL  # e.g., redis://localhost:6379
+
+    # PostgreSQL
+    echo $DATABASE_URL  # e.g., postgres://user:pass@localhost:5432/ojs?sslmode=disable
+
+    # AMQP
+    echo $AMQP_URL  # e.g., amqp://guest:guest@localhost:5672/
+    ```
+
+3. **Port conflict** — Check if port 8080 is already in use:
+
+    ```bash
+    lsof -i :8080
+    ```
+
+4. **Docker networking** — When using Docker Compose, services communicate by service name, not `localhost`:
+
+    ```yaml
+    # Correct:
+    REDIS_URL: redis://redis:6379
+    # Wrong:
+    REDIS_URL: redis://localhost:6379
+    ```
+
+### SDK cannot connect
+
+**Symptom:** SDK returns connection errors or timeouts.
+
+**Checklist:**
+
+1. Verify the server URL in your SDK configuration:
+
+<Tabs>
+  <TabItem label="Go">
+    ```go
+    client, err := ojs.NewClient("http://localhost:8080")
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```typescript
+    const client = new OJSClient({ url: "http://localhost:8080" });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    client = OJSClient(url="http://localhost:8080")
+    ```
+  </TabItem>
+</Tabs>
+
+2. Check for firewall rules or network policies blocking the connection.
+
+3. If using authentication, ensure your API key is valid:
+
+    ```bash
+    curl -v -H "Authorization: Bearer $OJS_API_KEY" \
+      http://localhost:8080/ojs/v1/health
+    ```
+
+---
+
+## Jobs stuck in states
+
+### Jobs stuck in `active`
+
+**Symptom:** Jobs remain in `active` state and are never completed.
+
+**Causes:**
+- Worker crashed without acknowledging the job
+- Worker is running but the handler never calls `ack` or `nack`
+- Network partition between worker and server
+
+**Solutions:**
+
+1. **Check worker logs** for panics, crashes, or unhandled errors.
+
+2. **Verify the handler calls ack/nack** — Every code path in your handler must call either `ack` (success) or `nack` (failure):
+
+    ```go
+    worker.Register("email.send", func(ctx context.Context, job *ojs.Job) error {
+        err := sendEmail(job.Args)
+        if err != nil {
+            return err  // SDK automatically nacks on error return
+        }
+        return nil  // SDK automatically acks on nil return
+    })
+    ```
+
+3. **Heartbeat timeout** — If your job takes longer than the visibility timeout (default: 30s), send heartbeats:
+
+    ```go
+    worker.Register("long.task", func(ctx context.Context, job *ojs.Job) error {
+        for i := 0; i < 100; i++ {
+            // Send heartbeat to extend visibility
+            job.Heartbeat(ctx, ojs.Progress{Percent: i})
+            processChunk(i)
+        }
+        return nil
+    })
+    ```
+
+4. **Force-cancel stuck jobs** via the API:
+
+    ```bash
+    curl -X DELETE http://localhost:8080/ojs/v1/jobs/$JOB_ID \
+      -H "Authorization: Bearer $OJS_API_KEY"
+    ```
+
+### Jobs stuck in `scheduled`
+
+**Symptom:** Scheduled jobs never transition to `available`.
+
+**Causes:**
+- The scheduler process is not running
+- Server clock is significantly skewed
+
+**Solutions:**
+
+1. Verify the server is running — the built-in scheduler automatically promotes scheduled jobs.
+2. Check the scheduled time hasn't drifted — all timestamps must be UTC in RFC 3339 format.
+
+### Jobs stuck in `retryable`
+
+**Symptom:** Jobs in `retryable` state are not being retried.
+
+**Causes:**
+- All workers are busy or down
+- The queue is paused
+- The retry backoff interval hasn't elapsed
+
+**Solutions:**
+
+1. Check if the queue is paused:
+
+    ```bash
+    curl http://localhost:8080/ojs/v1/queues \
+      -H "Authorization: Bearer $OJS_API_KEY"
+    ```
+
+2. Resume the queue if paused:
+
+    ```bash
+    curl -X POST http://localhost:8080/ojs/v1/queues/default/resume \
+      -H "Authorization: Bearer $OJS_API_KEY"
+    ```
+
+3. Verify workers are running and polling the correct queue.
+
+---
+
+## Performance troubleshooting
+
+### High latency
+
+**Symptom:** Jobs take a long time to start processing after enqueue.
+
+**Diagnosis:**
+
+1. **Check queue depth** — If `available` count is high relative to `active`, you need more workers:
+
+    ```bash
+    curl http://localhost:8080/ojs/v1/queues/default/stats \
+      -H "Authorization: Bearer $OJS_API_KEY"
+    ```
+
+2. **Check worker concurrency** — Increase the number of concurrent workers:
+
+<Tabs>
+  <TabItem label="Go">
+    ```go
+    worker, _ := ojs.NewWorker(ojs.WorkerConfig{
+        URL:         "http://localhost:8080",
+        Concurrency: 50,  // default is 10
+        Queues:      []string{"default"},
+    })
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```typescript
+    const worker = new OJSWorker({
+      url: "http://localhost:8080",
+      concurrency: 50,
+      queues: ["default"],
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    worker = OJSWorker(
+        url="http://localhost:8080",
+        concurrency=50,
+        queues=["default"],
+    )
+    ```
+  </TabItem>
+</Tabs>
+
+3. **Check backend latency** — The health endpoint reports backend latency. If it's >10ms, investigate backend performance.
+
+### High memory usage
+
+**Symptom:** OJS server or backend is consuming excessive memory.
+
+**Solutions:**
+
+- **Redis**: Check `INFO memory` for `used_memory`. Consider enabling `maxmemory-policy allkeys-lru`.
+- **PostgreSQL**: Run `VACUUM ANALYZE` on the jobs table. Check for long-running transactions with `pg_stat_activity`.
+- **NATS**: Check JetStream stream sizes and set appropriate `max_bytes` limits.
+
+### Throughput bottlenecks
+
+1. **Separate queues by priority** — Use dedicated queues for high-priority jobs.
+2. **Scale horizontally** — Deploy multiple OJS server instances behind a load balancer.
+3. **Tune poll intervals** — Reduce the fetch timeout for latency-sensitive queues.
+4. **Use batch enqueue** — `POST /ojs/v1/jobs/batch` is significantly faster than individual enqueues for bulk operations.
+
+---
+
+## Backend-specific issues
+
+### Redis
+
+| Issue | Solution |
+|-------|----------|
+| `WRONGTYPE Operation against a key` | OJS uses specific key patterns — don't store other data in the same Redis database |
+| `OOM command not allowed` | Increase `maxmemory` or add more Redis nodes |
+| `LOADING Redis is loading the dataset` | Wait for Redis to finish loading the RDB/AOF file |
+| Slow Lua scripts | Check Redis slowlog: `redis-cli slowlog get 10` |
+
+### PostgreSQL
+
+| Issue | Solution |
+|-------|----------|
+| `too many connections` | Increase `max_connections` or use PgBouncer for connection pooling |
+| `deadlock detected` | OJS uses `SKIP LOCKED` — this is rare but may occur with custom queries |
+| Table bloat | Run `VACUUM (VERBOSE, ANALYZE) ojs_jobs;` |
+| Slow queries | Check `pg_stat_statements` and add indexes if needed |
+
+### NATS
+
+| Issue | Solution |
+|-------|----------|
+| `no responders` | Ensure the NATS server has JetStream enabled: `nats-server --jetstream` |
+| Stream not found | OJS auto-creates streams on startup — restart the OJS server |
+| Consumer lag | Increase consumer `max_ack_pending` or add more workers |
+
+### Kafka
+
+| Issue | Solution |
+|-------|----------|
+| Consumer group rebalancing | Increase `session.timeout.ms` to reduce unnecessary rebalances |
+| Lag increasing | Add more partitions and consumers |
+| State inconsistency | Check the Redis state store connectivity (Kafka backend uses Redis for state) |
+
+### SQS
+
+| Issue | Solution |
+|-------|----------|
+| `AccessDenied` | Verify IAM permissions for SQS and DynamoDB |
+| Message visibility timeout | Increase the SQS queue's visibility timeout or send heartbeats more frequently |
+| DynamoDB throttling | Increase provisioned capacity or switch to on-demand mode |
+
+---
+
+## SDK debugging
+
+### Enable verbose logging
+
+<Tabs>
+  <TabItem label="Go">
+    ```go
+    client, _ := ojs.NewClient("http://localhost:8080",
+        ojs.WithLogger(slog.Default()),
+        ojs.WithDebug(true),
+    )
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```typescript
+    const client = new OJSClient({
+      url: "http://localhost:8080",
+      debug: true,
+    });
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
+
+    client = OJSClient(url="http://localhost:8080")
+    ```
+  </TabItem>
+</Tabs>
+
+### Common SDK issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| `connection refused` | Server not running or wrong URL | Check server URL and port |
+| `unauthorized` | Invalid or missing API key | Verify `Authorization` header |
+| Jobs not processing | Worker not registered for the job type | Ensure `worker.Register("type", handler)` matches the enqueued job type exactly |
+| Duplicate job processing | Unique jobs extension not enabled | Check server manifest for `unique-jobs` extension support |
+| Worker shuts down mid-job | No graceful shutdown | Use the SDK's shutdown method (e.g., `worker.Shutdown(ctx)`) |
+
+---
+
+## Health check interpretation
+
+| Status | Backend Status | Meaning |
+|--------|---------------|---------|
+| `200 OK`, `"status": "ok"` | `"connected"` | Everything is healthy |
+| `200 OK`, `"status": "ok"` | `"degraded"` | Backend is slow but functional |
+| `503 Service Unavailable` | `"disconnected"` | Backend is unreachable — jobs cannot be processed |
+
+### Monitoring recommendations
+
+- Poll `/ojs/v1/health` every 10–30 seconds from your monitoring system
+- Alert when status is not `200` for more than 60 seconds
+- Track `backend.latency_ms` and alert when it exceeds your SLA threshold
+- Monitor queue depths via `/ojs/v1/queues` and alert on growing backlogs
+
+---
+
+## Getting help
+
+If you've worked through this guide and still need help:
+
+1. Check the [Error Catalog](/reference/error-catalog/) for detailed error explanations
+2. Search [GitHub Issues](https://github.com/openjobspec/openjobspec/issues) for known problems
+3. Open a new issue with:
+   - OJS server version (`GET /ojs/v1/health` response)
+   - Backend type and version
+   - SDK language and version
+   - Relevant log output
+   - Steps to reproduce

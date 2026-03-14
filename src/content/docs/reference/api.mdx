@@ -1,0 +1,1011 @@
+---
+title: HTTP API Reference
+description: Complete HTTP API reference for OpenJobSpec servers with request/response examples and curl commands.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This page provides a practical, example-driven reference for every OJS HTTP endpoint. For the formal specification, see the [HTTP Binding spec](/spec/http-binding/) and the [HTTP API overview](/reference/http-api/).
+
+All endpoints are served under the base path `/ojs/v1`. Request and response bodies use `application/openjobspec+json` content type.
+
+## Authentication
+
+All API requests require an API key passed via the `Authorization` header:
+
+```bash
+curl -H "Authorization: Bearer ojs_sk_your_api_key" \
+  http://localhost:8080/ojs/v1/health
+```
+
+For local development, you can disable authentication:
+
+```bash
+export OJS_ALLOW_INSECURE_NO_AUTH=true
+```
+
+:::caution
+Never disable authentication in production. Always use API keys with appropriate RBAC roles.
+:::
+
+## Common headers
+
+**Request headers:**
+
+| Header | Value | Required |
+|--------|-------|----------|
+| `Authorization` | `Bearer <api_key>` | Yes |
+| `Content-Type` | `application/openjobspec+json` | Yes (POST/PUT) |
+| `Accept` | `application/openjobspec+json` | Recommended |
+| `OJS-Version` | `1.0.0-rc.1` | Optional |
+| `Idempotency-Key` | UUIDv4 | Optional (for retries) |
+
+**Response headers:**
+
+| Header | Description |
+|--------|-------------|
+| `OJS-Version` | Spec version the server implements |
+| `Content-Type` | `application/openjobspec+json` |
+| `X-Request-Id` | Unique request identifier for tracing |
+| `X-RateLimit-Remaining` | Requests remaining in the current window |
+
+---
+
+## Jobs
+
+### POST /ojs/v1/jobs — Enqueue a Job
+
+Creates a new job and transitions it to `available` (or `scheduled` if `scheduled_at` is set).
+
+**Request body:**
+
+```json
+{
+  "type": "email.send",
+  "queue": "default",
+  "args": ["user@example.com", "Welcome!", "Hello and welcome to our platform."],
+  "priority": 1,
+  "max_attempts": 5,
+  "metadata": {
+    "user_id": "usr_abc123"
+  }
+}
+```
+
+**Response (201 Created):**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "type": "email.send",
+  "queue": "default",
+  "state": "available",
+  "args": ["user@example.com", "Welcome!", "Hello and welcome to our platform."],
+  "priority": 1,
+  "max_attempts": 5,
+  "attempt": 0,
+  "metadata": {
+    "user_id": "usr_abc123"
+  },
+  "created_at": "2026-02-12T10:30:00.000Z",
+  "updated_at": "2026-02-12T10:30:00.000Z"
+}
+```
+
+**Status codes:**
+
+| Code | Description |
+|------|-------------|
+| 201 | Job created successfully |
+| 400 | Invalid request body (missing type, invalid args) |
+| 409 | Duplicate job (when using unique jobs extension) |
+| 422 | Validation error (unknown queue, invalid priority) |
+| 429 | Rate limit exceeded |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/jobs \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{
+    "type": "email.send",
+    "queue": "default",
+    "args": ["user@example.com", "Welcome!", "Hello and welcome."]
+  }'
+```
+
+#### Optional fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `queue` | string | `"default"` | Target queue name |
+| `priority` | integer | `1` | 1 (highest) to 4 (lowest) |
+| `max_attempts` | integer | `25` | Maximum delivery attempts |
+| `scheduled_at` | string | — | RFC 3339 timestamp for delayed execution |
+| `unique_key` | string | — | Deduplication key (unique jobs extension) |
+| `unique_period` | integer | — | Uniqueness window in seconds |
+| `metadata` | object | `{}` | Arbitrary key-value metadata |
+| `tags` | array | `[]` | String tags for filtering |
+
+### POST /ojs/v1/jobs/batch — Batch Enqueue
+
+Enqueue multiple jobs in a single atomic operation (up to 1000 jobs per batch).
+
+**Request body:**
+
+```json
+{
+  "jobs": [
+    {
+      "type": "email.send",
+      "queue": "emails",
+      "args": ["user1@example.com", "Welcome!", "Hello user1."]
+    },
+    {
+      "type": "email.send",
+      "queue": "emails",
+      "args": ["user2@example.com", "Welcome!", "Hello user2."]
+    }
+  ]
+}
+```
+
+**Response (201 Created):**
+
+```json
+{
+  "jobs": [
+    {
+      "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+      "type": "email.send",
+      "state": "available"
+    },
+    {
+      "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d7",
+      "type": "email.send",
+      "state": "available"
+    }
+  ],
+  "count": 2
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/jobs/batch \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{"jobs": [
+    {"type": "report.generate", "args": ["2024-Q1"]},
+    {"type": "report.generate", "args": ["2024-Q2"]}
+  ]}'
+```
+
+### GET /ojs/v1/jobs/:id — Get Job
+
+Retrieve the current state and details of a job by its ID.
+
+**Response (200 OK):**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "type": "email.send",
+  "queue": "default",
+  "state": "completed",
+  "args": ["user@example.com", "Welcome!", "Hello and welcome."],
+  "priority": 1,
+  "max_attempts": 5,
+  "attempt": 1,
+  "result": { "message_id": "msg_xyz789" },
+  "metadata": { "user_id": "usr_abc123" },
+  "created_at": "2026-02-12T10:30:00.000Z",
+  "updated_at": "2026-02-12T10:30:05.000Z",
+  "completed_at": "2026-02-12T10:30:05.000Z"
+}
+```
+
+| Code | Description |
+|------|-------------|
+| 200 | Job found |
+| 404 | Job not found |
+
+**Example:**
+
+```bash
+curl http://localhost:8080/ojs/v1/jobs/019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6 \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+### DELETE /ojs/v1/jobs/:id — Cancel Job
+
+Transitions a job to the `cancelled` state. Only jobs in `available`, `scheduled`, or `retryable` states can be cancelled.
+
+**Response (200 OK):**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "state": "cancelled",
+  "cancelled_at": "2026-02-12T10:35:00.000Z"
+}
+```
+
+| Code | Description |
+|------|-------------|
+| 200 | Job cancelled |
+| 404 | Job not found |
+| 409 | Job cannot be cancelled from its current state |
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/ojs/v1/jobs/019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6 \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+---
+
+## Worker Protocol
+
+Workers use these endpoints to fetch, process, and acknowledge jobs. All worker endpoints use `POST` because they carry request bodies and produce side effects.
+
+### POST /ojs/v1/workers/fetch — Fetch Jobs
+
+Long-polls for available jobs. Returns immediately if jobs are available, otherwise waits up to the specified timeout.
+
+**Request body:**
+
+```json
+{
+  "queues": ["default", "emails"],
+  "count": 10,
+  "timeout_ms": 30000,
+  "worker_id": "worker-abc-001"
+}
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "jobs": [
+    {
+      "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+      "type": "email.send",
+      "queue": "default",
+      "state": "active",
+      "args": ["user@example.com", "Welcome!", "Hello."],
+      "attempt": 1,
+      "max_attempts": 5,
+      "created_at": "2026-02-12T10:30:00.000Z"
+    }
+  ]
+}
+```
+
+**Response (204 No Content):** No jobs available within the timeout window.
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/workers/fetch \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{"queues": ["default"], "count": 5, "timeout_ms": 10000}'
+```
+
+### POST /ojs/v1/workers/ack — Acknowledge Job
+
+Marks a job as successfully completed, transitioning it from `active` to `completed`.
+
+**Request body:**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "result": {
+    "message_id": "msg_xyz789",
+    "delivered": true
+  }
+}
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "state": "completed"
+}
+```
+
+| Code | Description |
+|------|-------------|
+| 200 | Job acknowledged |
+| 404 | Job not found |
+| 409 | Job is not in `active` state |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/workers/ack \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{"id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6"}'
+```
+
+### POST /ojs/v1/workers/nack — Negative Acknowledge
+
+Reports a job failure. The server evaluates the retry policy and transitions the job to either `retryable` or `discarded`.
+
+**Request body:**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "error": {
+    "message": "SMTP connection refused",
+    "code": "SMTP_ERROR",
+    "retriable": true
+  }
+}
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "state": "retryable",
+  "next_attempt_at": "2026-02-12T10:31:00.000Z"
+}
+```
+
+| Code | Description |
+|------|-------------|
+| 200 | Failure recorded |
+| 404 | Job not found |
+| 409 | Job is not in `active` state |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/workers/nack \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{
+    "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+    "error": {"message": "SMTP timeout", "retriable": true}
+  }'
+```
+
+### POST /ojs/v1/workers/heartbeat — Heartbeat
+
+Extends the visibility timeout of an active job. Workers SHOULD send heartbeats periodically for long-running jobs to prevent them from being reclaimed.
+
+**Request body:**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "progress": {
+    "percent": 75,
+    "message": "Processing batch 3 of 4"
+  }
+}
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "state": "active",
+  "expires_at": "2026-02-12T10:32:00.000Z"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/workers/heartbeat \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{"id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6"}'
+```
+
+---
+
+## Queues
+
+### GET /ojs/v1/queues — List Queues
+
+Returns all known queues and their current status.
+
+**Response (200 OK):**
+
+```json
+{
+  "queues": [
+    {
+      "name": "default",
+      "paused": false,
+      "stats": {
+        "available": 42,
+        "active": 8,
+        "completed": 1250,
+        "failed": 3,
+        "scheduled": 10
+      }
+    },
+    {
+      "name": "emails",
+      "paused": false,
+      "stats": {
+        "available": 0,
+        "active": 2,
+        "completed": 890,
+        "failed": 0,
+        "scheduled": 0
+      }
+    }
+  ]
+}
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/ojs/v1/queues \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+### GET /ojs/v1/queues/:name/stats — Queue Statistics
+
+Returns detailed statistics for a specific queue.
+
+**Response (200 OK):**
+
+```json
+{
+  "name": "default",
+  "paused": false,
+  "stats": {
+    "available": 42,
+    "active": 8,
+    "pending": 0,
+    "scheduled": 10,
+    "completed": 1250,
+    "retryable": 5,
+    "cancelled": 2,
+    "discarded": 1
+  },
+  "throughput": {
+    "jobs_per_second": 12.5,
+    "avg_latency_ms": 45
+  }
+}
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/ojs/v1/queues/default/stats \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+### POST /ojs/v1/queues/:name/pause — Pause Queue
+
+Pauses a queue. Workers will no longer receive jobs from this queue until it is resumed. Jobs already in `active` state continue processing.
+
+**Response (200 OK):**
+
+```json
+{
+  "name": "default",
+  "paused": true,
+  "paused_at": "2026-02-12T10:30:00.000Z"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/queues/default/pause \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+### POST /ojs/v1/queues/:name/resume — Resume Queue
+
+Resumes a paused queue.
+
+**Response (200 OK):**
+
+```json
+{
+  "name": "default",
+  "paused": false
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/queues/default/resume \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+---
+
+## Dead Letter
+
+Jobs that exhaust all retry attempts are moved to the dead letter queue.
+
+### GET /ojs/v1/dead-letter — List Dead Letter Jobs
+
+Returns jobs in the dead letter queue with pagination.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `page` | integer | `1` | Page number |
+| `per_page` | integer | `25` | Results per page (max 100) |
+| `queue` | string | — | Filter by original queue |
+
+**Response (200 OK):**
+
+```json
+{
+  "jobs": [
+    {
+      "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+      "type": "payment.process",
+      "queue": "payments",
+      "state": "discarded",
+      "attempt": 5,
+      "max_attempts": 5,
+      "last_error": {
+        "message": "Gateway timeout",
+        "code": "GATEWAY_TIMEOUT"
+      },
+      "created_at": "2026-02-12T10:30:00.000Z",
+      "discarded_at": "2026-02-12T11:45:00.000Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "per_page": 25
+}
+```
+
+**Example:**
+
+```bash
+curl "http://localhost:8080/ojs/v1/dead-letter?per_page=10" \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+### POST /ojs/v1/dead-letter/:id/retry — Retry Dead Letter Job
+
+Moves a discarded job back to `available` state for reprocessing. Resets the attempt counter.
+
+**Response (200 OK):**
+
+```json
+{
+  "id": "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6",
+  "state": "available",
+  "attempt": 0
+}
+```
+
+| Code | Description |
+|------|-------------|
+| 200 | Job re-queued |
+| 404 | Job not found in dead letter queue |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/dead-letter/019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6/retry \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+---
+
+## Scheduling
+
+### POST /ojs/v1/cron — Register Cron Job
+
+Registers a recurring job on a cron schedule.
+
+**Request body:**
+
+```json
+{
+  "name": "daily-report",
+  "expression": "0 9 * * *",
+  "timezone": "America/New_York",
+  "job": {
+    "type": "report.daily",
+    "queue": "reports",
+    "args": ["all-metrics"]
+  }
+}
+```
+
+**Response (201 Created):**
+
+```json
+{
+  "id": "cron_019414d4",
+  "name": "daily-report",
+  "expression": "0 9 * * *",
+  "timezone": "America/New_York",
+  "next_run_at": "2026-02-13T14:00:00.000Z",
+  "job": {
+    "type": "report.daily",
+    "queue": "reports",
+    "args": ["all-metrics"]
+  },
+  "created_at": "2026-02-12T10:30:00.000Z"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/cron \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{
+    "name": "hourly-cleanup",
+    "expression": "0 * * * *",
+    "job": {"type": "cleanup.expired", "queue": "maintenance"}
+  }'
+```
+
+### GET /ojs/v1/cron — List Cron Jobs
+
+**Response (200 OK):**
+
+```json
+{
+  "cron_jobs": [
+    {
+      "id": "cron_019414d4",
+      "name": "daily-report",
+      "expression": "0 9 * * *",
+      "timezone": "America/New_York",
+      "next_run_at": "2026-02-13T14:00:00.000Z",
+      "last_run_at": "2026-02-12T14:00:00.000Z",
+      "created_at": "2026-02-12T10:30:00.000Z"
+    }
+  ]
+}
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/ojs/v1/cron \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+### DELETE /ojs/v1/cron/:name — Unregister Cron Job
+
+Removes a cron job registration. In-flight jobs from this cron are not affected.
+
+**Response (200 OK):**
+
+```json
+{
+  "name": "daily-report",
+  "deleted": true
+}
+```
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/ojs/v1/cron/daily-report \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+---
+
+## Workflows
+
+Workflows compose multiple jobs using three primitives: **chain** (sequential), **group** (parallel fan-out/fan-in), and **batch** (callbacks on completion).
+
+### POST /ojs/v1/workflows — Create Workflow
+
+**Request body (chain example):**
+
+```json
+{
+  "type": "chain",
+  "name": "order-processing",
+  "steps": [
+    { "type": "order.validate", "queue": "orders", "args": ["ord_123"] },
+    { "type": "payment.charge", "queue": "payments", "args": ["ord_123"] },
+    { "type": "email.receipt", "queue": "emails", "args": ["ord_123"] }
+  ]
+}
+```
+
+**Request body (group example):**
+
+```json
+{
+  "type": "group",
+  "name": "parallel-reports",
+  "jobs": [
+    { "type": "report.sales", "queue": "reports", "args": ["2024-Q1"] },
+    { "type": "report.traffic", "queue": "reports", "args": ["2024-Q1"] },
+    { "type": "report.revenue", "queue": "reports", "args": ["2024-Q1"] }
+  ]
+}
+```
+
+**Response (201 Created):**
+
+```json
+{
+  "id": "wf_019414d4-8b2e-7c3a",
+  "type": "chain",
+  "name": "order-processing",
+  "state": "active",
+  "steps": [
+    { "id": "019414d4-...-c5d6", "type": "order.validate", "state": "available" },
+    { "id": "019414d4-...-c5d7", "type": "payment.charge", "state": "pending" },
+    { "id": "019414d4-...-c5d8", "type": "email.receipt", "state": "pending" }
+  ],
+  "created_at": "2026-02-12T10:30:00.000Z"
+}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/ojs/v1/workflows \
+  -H "Content-Type: application/openjobspec+json" \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -d '{
+    "type": "chain",
+    "name": "etl-pipeline",
+    "steps": [
+      {"type": "etl.extract", "args": ["source_db"]},
+      {"type": "etl.transform", "args": ["normalize"]},
+      {"type": "etl.load", "args": ["warehouse"]}
+    ]
+  }'
+```
+
+### GET /ojs/v1/workflows/:id — Get Workflow Status
+
+**Response (200 OK):**
+
+```json
+{
+  "id": "wf_019414d4-8b2e-7c3a",
+  "type": "chain",
+  "name": "order-processing",
+  "state": "completed",
+  "steps": [
+    { "id": "019414d4-...-c5d6", "type": "order.validate", "state": "completed" },
+    { "id": "019414d4-...-c5d7", "type": "payment.charge", "state": "completed" },
+    { "id": "019414d4-...-c5d8", "type": "email.receipt", "state": "completed" }
+  ],
+  "created_at": "2026-02-12T10:30:00.000Z",
+  "completed_at": "2026-02-12T10:30:15.000Z"
+}
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/ojs/v1/workflows/wf_019414d4-8b2e-7c3a \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+---
+
+## Events
+
+Real-time event streaming via Server-Sent Events (SSE). See the [Events spec](/spec/events/) for the full event type catalog.
+
+### GET /ojs/v1/events — SSE Event Stream
+
+Opens a Server-Sent Events stream for all job lifecycle events.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `queues` | string | — | Comma-separated queue filter |
+| `types` | string | — | Comma-separated event type filter |
+
+**Example:**
+
+```bash
+curl -N http://localhost:8080/ojs/v1/events \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -H "Accept: text/event-stream"
+```
+
+**Event format:**
+
+```
+event: job.completed
+data: {"id":"019414d4-...","type":"email.send","queue":"default","state":"completed","completed_at":"2026-02-12T10:30:05.000Z"}
+
+event: job.failed
+data: {"id":"019414d5-...","type":"payment.charge","queue":"payments","state":"retryable","error":{"message":"timeout"}}
+```
+
+### GET /ojs/v1/events/jobs/:id — Job Event Stream
+
+Stream events for a specific job.
+
+**Example:**
+
+```bash
+curl -N http://localhost:8080/ojs/v1/events/jobs/019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6 \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -H "Accept: text/event-stream"
+```
+
+### GET /ojs/v1/events/queues/:name — Queue Event Stream
+
+Stream events for all jobs in a specific queue.
+
+**Example:**
+
+```bash
+curl -N http://localhost:8080/ojs/v1/events/queues/payments \
+  -H "Authorization: Bearer $OJS_API_KEY" \
+  -H "Accept: text/event-stream"
+```
+
+---
+
+## System
+
+### GET /ojs/manifest — Server Manifest
+
+Returns the conformance manifest describing what the server supports. This endpoint is NOT versioned and lives outside `/ojs/v1/`.
+
+**Response (200 OK):**
+
+```json
+{
+  "spec_version": "1.0.0-rc.1",
+  "backend": "redis",
+  "conformance_level": 4,
+  "extensions": [
+    "retry",
+    "scheduling",
+    "workflows",
+    "unique-jobs",
+    "events",
+    "middleware",
+    "dead-letter",
+    "rate-limiting",
+    "priority",
+    "encryption"
+  ]
+}
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/ojs/manifest \
+  -H "Authorization: Bearer $OJS_API_KEY"
+```
+
+### GET /ojs/v1/health — Health Check
+
+Returns server health status and backend connectivity.
+
+**Response (200 OK):**
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0-rc.1",
+  "uptime_seconds": 86400,
+  "backend": {
+    "type": "redis",
+    "status": "connected",
+    "latency_ms": 2
+  }
+}
+```
+
+**Response (503 Service Unavailable):** Backend is unreachable.
+
+**Example:**
+
+```bash
+curl http://localhost:8080/ojs/v1/health
+```
+
+:::note
+The health endpoint does not require authentication and can be used for load balancer health checks.
+:::
+
+---
+
+## Error responses
+
+All error responses follow a consistent format:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Field 'type' is required",
+    "details": {
+      "field": "type",
+      "constraint": "required"
+    }
+  },
+  "request_id": "req_019414d4"
+}
+```
+
+Common error codes:
+
+| HTTP Status | Error Code | Description |
+|-------------|-----------|-------------|
+| 400 | `BAD_REQUEST` | Malformed JSON or missing required fields |
+| 401 | `UNAUTHORIZED` | Missing or invalid API key |
+| 403 | `FORBIDDEN` | Insufficient permissions (RBAC) |
+| 404 | `NOT_FOUND` | Resource not found |
+| 409 | `CONFLICT` | State transition conflict or duplicate |
+| 422 | `VALIDATION_ERROR` | Semantic validation failure |
+| 429 | `RATE_LIMITED` | Too many requests |
+| 500 | `INTERNAL_ERROR` | Server error |
+
+For the complete error catalog, see the [Error Codes reference](/reference/error-codes/).
+
+---
+
+## Pagination
+
+List endpoints support cursor-based pagination:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (1-based) |
+| `per_page` | integer | Results per page (default 25, max 100) |
+
+Response includes pagination metadata:
+
+```json
+{
+  "data": [...],
+  "total": 150,
+  "page": 1,
+  "per_page": 25,
+  "has_more": true
+}
+```
+
+## Rate limiting
+
+API requests are rate-limited per API key. Rate limit information is included in response headers:
+
+| Header | Description |
+|--------|-------------|
+| `X-RateLimit-Limit` | Maximum requests per window |
+| `X-RateLimit-Remaining` | Requests remaining |
+| `X-RateLimit-Reset` | UTC epoch timestamp when the window resets |
+
+When rate limited, the server returns `429 Too Many Requests` with a `Retry-After` header.

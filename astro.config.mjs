@@ -150,6 +150,7 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
+            { label: 'Quick Start', slug: 'guides/quickstart' },
             {
               label: 'Implement a Backend',
               slug: 'guides/implement-a-backend',
@@ -158,6 +159,14 @@ export default defineConfig({
             {
               label: 'Deployment Guide',
               slug: 'guides/deployment',
+            },
+            {
+              label: 'Cloud Administration',
+              slug: 'guides/cloud-admin',
+            },
+            {
+              label: 'Troubleshooting',
+              slug: 'guides/troubleshooting',
             },
             {
               label: 'Migrate from Sidekiq',
@@ -185,6 +194,8 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'HTTP API', slug: 'reference/http-api' },
+            { label: 'API Examples', slug: 'reference/api' },
+            { label: 'Terraform Provider', slug: 'reference/terraform' },
             { label: 'JSON Schemas', slug: 'reference/json-schemas' },
             { label: 'Error Codes', slug: 'reference/error-codes' },
             { label: 'Error Catalog', slug: 'reference/error-catalog' },

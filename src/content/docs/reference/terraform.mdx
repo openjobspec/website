@@ -1,0 +1,449 @@
+---
+title: Terraform Provider
+description: Manage OJS queues, cron jobs, workflows, and resources as infrastructure-as-code with the Terraform provider.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+The OJS Terraform provider lets you manage your job infrastructure declaratively. Define queues, cron schedules, workflows, and jobs in HCL and apply them with standard Terraform workflows.
+
+:::caution[Experimental]
+The Terraform provider is currently experimental. APIs may change before the stable 1.0 release.
+:::
+
+## Installation
+
+Add the provider to your `required_providers` block:
+
+```hcl
+terraform {
+  required_version = ">= 1.5.0"
+  required_providers {
+    ojs = {
+      source  = "openjobspec/ojs"
+      version = "~> 0.1"
+    }
+  }
+}
+```
+
+## Provider configuration
+
+```hcl
+provider "ojs" {
+  endpoint = "http://localhost:8080"  # OJS server URL
+  api_key  = var.ojs_api_key          # API key for authentication
+}
+```
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `endpoint` | string | Yes | Base URL of the OJS server |
+| `api_key` | string | Yes | API key with admin permissions |
+
+:::tip
+Use environment variables to avoid hardcoding credentials:
+
+```bash
+export OJS_ENDPOINT="http://localhost:8080"
+export OJS_API_KEY="ojs_sk_your_key"
+```
+
+The provider reads `OJS_ENDPOINT` and `OJS_API_KEY` automatically when the attributes are not set in the configuration.
+:::
+
+---
+
+## Resources
+
+### ojs_queue
+
+Manages queue configuration including pause state, worker limits, and rate limiting.
+
+```hcl
+resource "ojs_queue" "emails" {
+  name        = "emails"
+  paused      = false
+  max_workers = 10
+  rate_limit  = 100  # jobs per second
+}
+
+resource "ojs_queue" "critical" {
+  name        = "critical"
+  paused      = false
+  max_workers = 50
+  rate_limit  = 0  # unlimited
+}
+```
+
+#### Attributes
+
+| Attribute | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Queue name (must be unique) |
+| `paused` | bool | No | `false` | Whether the queue is paused |
+| `max_workers` | number | No | `0` (unlimited) | Maximum concurrent workers |
+| `rate_limit` | number | No | `0` (unlimited) | Maximum jobs per second |
+
+#### Read-only attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Queue identifier |
+| `stats.available` | number | Jobs waiting to be processed |
+| `stats.active` | number | Jobs currently being processed |
+| `stats.completed` | number | Total completed jobs |
+
+---
+
+### ojs_cron_job
+
+Registers a recurring job on a cron schedule.
+
+```hcl
+resource "ojs_cron_job" "daily_report" {
+  name       = "daily-report"
+  expression = "0 9 * * *"
+  timezone   = "America/New_York"
+
+  job_type = "report.daily"
+  queue    = ojs_queue.emails.name
+  job_args = jsonencode(["all-metrics"])
+}
+
+resource "ojs_cron_job" "hourly_cleanup" {
+  name       = "hourly-cleanup"
+  expression = "0 * * * *"
+
+  job_type = "cleanup.expired"
+  queue    = "maintenance"
+  job_args = jsonencode(["30d"])
+}
+```
+
+#### Attributes
+
+| Attribute | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Unique cron job name |
+| `expression` | string | Yes | — | Cron expression (5 or 6 fields) |
+| `timezone` | string | No | `"UTC"` | IANA timezone |
+| `job_type` | string | Yes | — | Job type to enqueue |
+| `queue` | string | No | `"default"` | Target queue |
+| `job_args` | string | No | `"[]"` | JSON-encoded args array |
+
+#### Read-only attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Cron job identifier |
+| `next_run_at` | string | Next scheduled execution (RFC 3339) |
+| `last_run_at` | string | Last execution time (RFC 3339) |
+
+---
+
+### ojs_workflow
+
+Defines a workflow composed of chained, grouped, or batched jobs.
+
+```hcl
+resource "ojs_workflow" "order_pipeline" {
+  name = "order-processing"
+  type = "chain"
+
+  steps = jsonencode([
+    {
+      type  = "order.validate"
+      queue = "orders"
+      args  = []
+    },
+    {
+      type  = "payment.charge"
+      queue = "payments"
+      args  = []
+    },
+    {
+      type  = "email.receipt"
+      queue = ojs_queue.emails.name
+      args  = []
+    }
+  ])
+}
+
+resource "ojs_workflow" "parallel_reports" {
+  name = "quarterly-reports"
+  type = "group"
+
+  jobs = jsonencode([
+    { type = "report.sales",   queue = "reports", args = ["2024-Q1"] },
+    { type = "report.traffic", queue = "reports", args = ["2024-Q1"] },
+    { type = "report.revenue", queue = "reports", args = ["2024-Q1"] }
+  ])
+}
+```
+
+#### Attributes
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Workflow name |
+| `type` | string | Yes | `"chain"`, `"group"`, or `"batch"` |
+| `steps` | string | No | JSON-encoded steps array (for chain type) |
+| `jobs` | string | No | JSON-encoded jobs array (for group/batch types) |
+
+#### Read-only attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Workflow identifier |
+| `state` | string | Current workflow state |
+
+---
+
+### ojs_job
+
+Enqueues a one-off job. Useful for seed data, migrations, or triggering initial workflows.
+
+```hcl
+resource "ojs_job" "seed_data" {
+  type         = "db.seed"
+  queue        = "maintenance"
+  args         = jsonencode(["users", "products"])
+  priority     = 1
+  max_attempts = 3
+}
+
+resource "ojs_job" "scheduled_migration" {
+  type         = "db.migrate"
+  queue        = "maintenance"
+  args         = jsonencode(["v2.0"])
+  scheduled_at = "2026-03-01T00:00:00Z"
+}
+```
+
+#### Attributes
+
+| Attribute | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `type` | string | Yes | — | Job type |
+| `queue` | string | No | `"default"` | Target queue |
+| `args` | string | No | `"[]"` | JSON-encoded args array |
+| `priority` | number | No | `1` | Priority (1=highest, 4=lowest) |
+| `max_attempts` | number | No | `25` | Maximum retry attempts |
+| `scheduled_at` | string | No | — | RFC 3339 timestamp for delayed execution |
+
+#### Read-only attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Job ID (UUIDv7) |
+| `state` | string | Current job state |
+| `created_at` | string | Creation timestamp |
+
+---
+
+## Data sources
+
+### ojs_job
+
+Look up a job by ID.
+
+```hcl
+data "ojs_job" "example" {
+  id = "019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6"
+}
+
+output "job_state" {
+  value = data.ojs_job.example.state
+}
+```
+
+### ojs_queue
+
+Look up a queue by name.
+
+```hcl
+data "ojs_queue" "default" {
+  name = "default"
+}
+
+output "queue_paused" {
+  value = data.ojs_queue.default.paused
+}
+```
+
+### ojs_queue_stats
+
+Read real-time statistics for a queue.
+
+```hcl
+data "ojs_queue_stats" "default" {
+  name = "default"
+}
+
+output "pending_jobs" {
+  value = data.ojs_queue_stats.default.available
+}
+
+output "active_jobs" {
+  value = data.ojs_queue_stats.default.active
+}
+```
+
+### ojs_worker
+
+Look up a worker by ID.
+
+```hcl
+data "ojs_worker" "main" {
+  worker_id = "worker-abc-001"
+}
+```
+
+---
+
+## Complete example
+
+A production-ready configuration managing queues, cron jobs, and a workflow:
+
+```hcl
+terraform {
+  required_version = ">= 1.5.0"
+  required_providers {
+    ojs = {
+      source  = "openjobspec/ojs"
+      version = "~> 0.1"
+    }
+  }
+}
+
+variable "ojs_api_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "ojs_endpoint" {
+  type    = string
+  default = "http://localhost:8080"
+}
+
+provider "ojs" {
+  endpoint = var.ojs_endpoint
+  api_key  = var.ojs_api_key
+}
+
+# --- Queues ---
+
+resource "ojs_queue" "default" {
+  name        = "default"
+  max_workers = 20
+}
+
+resource "ojs_queue" "emails" {
+  name        = "emails"
+  max_workers = 10
+  rate_limit  = 50
+}
+
+resource "ojs_queue" "payments" {
+  name        = "payments"
+  max_workers = 5
+  rate_limit  = 20
+}
+
+# --- Cron jobs ---
+
+resource "ojs_cron_job" "daily_report" {
+  name       = "daily-report"
+  expression = "0 9 * * *"
+  timezone   = "America/New_York"
+  job_type   = "report.daily"
+  queue      = ojs_queue.default.name
+  job_args   = jsonencode(["all-metrics"])
+}
+
+resource "ojs_cron_job" "nightly_cleanup" {
+  name       = "nightly-cleanup"
+  expression = "0 2 * * *"
+  job_type   = "cleanup.expired"
+  queue      = "maintenance"
+  job_args   = jsonencode(["30d"])
+}
+
+# --- Workflow ---
+
+resource "ojs_workflow" "order_pipeline" {
+  name = "order-processing"
+  type = "chain"
+  steps = jsonencode([
+    { type = "order.validate", queue = ojs_queue.default.name, args = [] },
+    { type = "payment.charge", queue = ojs_queue.payments.name, args = [] },
+    { type = "email.receipt",  queue = ojs_queue.emails.name,   args = [] }
+  ])
+}
+
+# --- Outputs ---
+
+output "queue_ids" {
+  value = {
+    default  = ojs_queue.default.id
+    emails   = ojs_queue.emails.id
+    payments = ojs_queue.payments.id
+  }
+}
+
+output "workflow_id" {
+  value = ojs_workflow.order_pipeline.id
+}
+```
+
+---
+
+## Importing existing resources
+
+Import resources already managed by an OJS server into Terraform state:
+
+<Tabs>
+  <TabItem label="Queue">
+    ```bash
+    terraform import ojs_queue.emails emails
+    ```
+  </TabItem>
+  <TabItem label="Cron Job">
+    ```bash
+    terraform import ojs_cron_job.daily_report daily-report
+    ```
+  </TabItem>
+  <TabItem label="Job">
+    ```bash
+    terraform import ojs_job.seed_data 019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6
+    ```
+  </TabItem>
+</Tabs>
+
+Or use import blocks (Terraform 1.5+):
+
+```hcl
+import {
+  to = ojs_queue.emails
+  id = "emails"
+}
+
+import {
+  to = ojs_cron_job.daily_report
+  id = "daily-report"
+}
+```
+
+---
+
+## Tips
+
+- **Use variables for API keys** — Never hardcode credentials in `.tf` files. Use `TF_VAR_ojs_api_key` or a secrets manager.
+- **Reference queues across resources** — Use `ojs_queue.name.name` to ensure cron jobs and workflows target the correct queue.
+- **Plan before apply** — Always run `terraform plan` to review changes before applying, especially for cron schedules and workflows.
+- **State management** — Use remote state (S3, GCS, or Terraform Cloud) for team environments.
+
+## Source code
+
+The Terraform provider source is at [`terraform-provider-ojs/`](https://github.com/openjobspec/openjobspec/tree/main/terraform-provider-ojs).

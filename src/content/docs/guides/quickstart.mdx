@@ -1,0 +1,493 @@
+---
+title: Quick Start Guide
+description: Get a working OJS background job system running in 30 seconds with Docker Compose, then enqueue and process your first job.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Get from zero to processing background jobs in under a minute. This guide starts an OJS server with Docker, then walks you through enqueuing and processing a job in your language of choice.
+
+:::tip[Looking for in-depth tutorials?]
+After this quickstart, check out the language-specific [Your First Job tutorials](/tutorials/your-first-job-go/) for a deeper walkthrough.
+:::
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose installed
+- One of: Go 1.24+, Node.js 18+, Python 3.11+, Ruby 3.2+, Rust 1.75+, or Java 21+
+
+## Step 1 — Start the server (30 seconds)
+
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+      OJS_ALLOW_INSECURE_NO_AUTH: "true"
+    depends_on:
+      - redis
+```
+
+Start it:
+
+```bash
+docker compose up -d
+```
+
+Verify:
+
+```bash
+curl http://localhost:8080/ojs/v1/health
+# {"status":"ok","backend":{"type":"redis","status":"connected"}}
+```
+
+---
+
+## Step 2 — Install the SDK
+
+<Tabs>
+  <TabItem label="Go">
+    ```bash
+    mkdir ojs-demo && cd ojs-demo
+    go mod init ojs-demo
+    go get github.com/openjobspec/ojs-go-sdk
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```bash
+    mkdir ojs-demo && cd ojs-demo
+    npm init -y
+    npm install @openjobspec/sdk
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```bash
+    mkdir ojs-demo && cd ojs-demo
+    pip install openjobspec
+    ```
+  </TabItem>
+  <TabItem label="Ruby">
+    ```bash
+    mkdir ojs-demo && cd ojs-demo
+    gem install ojs
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```bash
+    cargo new ojs-demo && cd ojs-demo
+    cargo add ojs
+    cargo add tokio --features full
+    ```
+  </TabItem>
+  <TabItem label="Java">
+    ```xml
+    <!-- pom.xml -->
+    <dependency>
+      <groupId>org.openjobspec</groupId>
+      <artifactId>ojs-sdk</artifactId>
+      <version>0.3.0</version>
+    </dependency>
+    ```
+  </TabItem>
+</Tabs>
+
+---
+
+## Step 3 — Enqueue your first job
+
+<Tabs>
+  <TabItem label="Go">
+    ```go
+    // main.go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "log"
+
+        ojs "github.com/openjobspec/ojs-go-sdk"
+    )
+
+    func main() {
+        client, err := ojs.NewClient("http://localhost:8080")
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        job, err := client.Enqueue(context.Background(), ojs.Job{
+            Type:  "greeting.say_hello",
+            Queue: "default",
+            Args:  []any{"world"},
+        })
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        fmt.Printf("Enqueued job %s (state: %s)\n", job.ID, job.State)
+    }
+    ```
+
+    ```bash
+    go run main.go
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```typescript
+    // enqueue.mjs
+    import { OJSClient } from "@openjobspec/sdk";
+
+    const client = new OJSClient({ url: "http://localhost:8080" });
+
+    const job = await client.enqueue({
+      type: "greeting.say_hello",
+      queue: "default",
+      args: ["world"],
+    });
+
+    console.log(`Enqueued job ${job.id} (state: ${job.state})`);
+    ```
+
+    ```bash
+    node enqueue.mjs
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    # enqueue.py
+    from openjobspec import OJSClient
+
+    client = OJSClient(url="http://localhost:8080")
+
+    job = client.enqueue(
+        type="greeting.say_hello",
+        queue="default",
+        args=["world"],
+    )
+
+    print(f"Enqueued job {job.id} (state: {job.state})")
+    ```
+
+    ```bash
+    python enqueue.py
+    ```
+  </TabItem>
+  <TabItem label="Ruby">
+    ```ruby
+    # enqueue.rb
+    require "ojs"
+
+    client = OJS::Client.new(url: "http://localhost:8080")
+
+    job = client.enqueue(
+      type: "greeting.say_hello",
+      queue: "default",
+      args: ["world"]
+    )
+
+    puts "Enqueued job #{job.id} (state: #{job.state})"
+    ```
+
+    ```bash
+    ruby enqueue.rb
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    // src/main.rs
+    use ojs::Client;
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new("http://localhost:8080")?;
+
+        let job = client.enqueue(ojs::Job {
+            job_type: "greeting.say_hello".into(),
+            queue: "default".into(),
+            args: vec![serde_json::json!("world")],
+            ..Default::default()
+        }).await?;
+
+        println!("Enqueued job {} (state: {:?})", job.id, job.state);
+        Ok(())
+    }
+    ```
+
+    ```bash
+    cargo run
+    ```
+  </TabItem>
+  <TabItem label="Java">
+    ```java
+    // EnqueueDemo.java
+    import org.openjobspec.sdk.OJSClient;
+    import org.openjobspec.sdk.Job;
+
+    public class EnqueueDemo {
+        public static void main(String[] args) {
+            var client = OJSClient.create("http://localhost:8080");
+
+            var job = client.enqueue(Job.builder()
+                .type("greeting.say_hello")
+                .queue("default")
+                .args("world")
+                .build());
+
+            System.out.printf("Enqueued job %s (state: %s)%n", job.getId(), job.getState());
+        }
+    }
+    ```
+
+    ```bash
+    mvn compile exec:java -Dexec.mainClass="EnqueueDemo"
+    ```
+  </TabItem>
+</Tabs>
+
+You should see output like: `Enqueued job 019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6 (state: available)`
+
+---
+
+## Step 4 — Process your first job
+
+<Tabs>
+  <TabItem label="Go">
+    ```go
+    // worker.go
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "log"
+        "os/signal"
+        "syscall"
+
+        ojs "github.com/openjobspec/ojs-go-sdk"
+    )
+
+    func main() {
+        worker, err := ojs.NewWorker(ojs.WorkerConfig{
+            URL:    "http://localhost:8080",
+            Queues: []string{"default"},
+        })
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        worker.Register("greeting.say_hello", func(ctx context.Context, job *ojs.Job) error {
+            name := job.Args[0].(string)
+            fmt.Printf("Hello, %s! (job %s)\n", name, job.ID)
+            return nil
+        })
+
+        ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+        defer stop()
+
+        if err := worker.Start(ctx); err != nil {
+            log.Fatal(err)
+        }
+    }
+    ```
+
+    ```bash
+    go run worker.go
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```typescript
+    // worker.mjs
+    import { OJSWorker } from "@openjobspec/sdk";
+
+    const worker = new OJSWorker({
+      url: "http://localhost:8080",
+      queues: ["default"],
+    });
+
+    worker.register("greeting.say_hello", async (job) => {
+      const name = job.args[0];
+      console.log(`Hello, ${name}! (job ${job.id})`);
+    });
+
+    await worker.start();
+    console.log("Worker started. Press Ctrl+C to stop.");
+    ```
+
+    ```bash
+    node worker.mjs
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    # worker.py
+    from openjobspec import OJSWorker
+
+    worker = OJSWorker(url="http://localhost:8080", queues=["default"])
+
+    @worker.register("greeting.say_hello")
+    def say_hello(job):
+        name = job.args[0]
+        print(f"Hello, {name}! (job {job.id})")
+
+    if __name__ == "__main__":
+        print("Worker started. Press Ctrl+C to stop.")
+        worker.start()
+    ```
+
+    ```bash
+    python worker.py
+    ```
+  </TabItem>
+  <TabItem label="Ruby">
+    ```ruby
+    # worker.rb
+    require "ojs"
+
+    worker = OJS::Worker.new(url: "http://localhost:8080", queues: ["default"])
+
+    worker.register("greeting.say_hello") do |job|
+      name = job.args[0]
+      puts "Hello, #{name}! (job #{job.id})"
+    end
+
+    puts "Worker started. Press Ctrl+C to stop."
+    worker.start
+    ```
+
+    ```bash
+    ruby worker.rb
+    ```
+  </TabItem>
+  <TabItem label="Rust">
+    ```rust
+    // src/worker.rs
+    use ojs::{Worker, WorkerConfig, Job};
+
+    async fn say_hello(job: &Job) -> Result<(), Box<dyn std::error::Error>> {
+        let name = job.args[0].as_str().unwrap_or("stranger");
+        println!("Hello, {}! (job {})", name, job.id);
+        Ok(())
+    }
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let mut worker = Worker::new(WorkerConfig {
+            url: "http://localhost:8080".into(),
+            queues: vec!["default".into()],
+            ..Default::default()
+        })?;
+
+        worker.register("greeting.say_hello", say_hello);
+
+        println!("Worker started. Press Ctrl+C to stop.");
+        worker.start().await
+    }
+    ```
+
+    ```bash
+    cargo run --bin worker
+    ```
+  </TabItem>
+  <TabItem label="Java">
+    ```java
+    // WorkerDemo.java
+    import org.openjobspec.sdk.OJSWorker;
+    import org.openjobspec.sdk.WorkerConfig;
+
+    public class WorkerDemo {
+        public static void main(String[] args) {
+            var worker = OJSWorker.create(WorkerConfig.builder()
+                .url("http://localhost:8080")
+                .queues("default")
+                .build());
+
+            worker.register("greeting.say_hello", job -> {
+                String name = (String) job.getArgs().get(0);
+                System.out.printf("Hello, %s! (job %s)%n", name, job.getId());
+            });
+
+            System.out.println("Worker started. Press Ctrl+C to stop.");
+            worker.start();
+        }
+    }
+    ```
+
+    ```bash
+    mvn compile exec:java -Dexec.mainClass="WorkerDemo"
+    ```
+  </TabItem>
+</Tabs>
+
+You should see: `Hello, world! (job 019414d4-8b2e-7c3a-b5d1-f0e2a3b4c5d6)`
+
+---
+
+## Step 5 — Monitor with the Admin UI
+
+Start the Admin UI alongside your server:
+
+```yaml
+# Add to your docker-compose.yml
+  ojs-admin-ui:
+    image: ghcr.io/openjobspec/ojs-admin-ui:latest
+    ports:
+      - "3000:3000"
+    environment:
+      OJS_SERVER_URL: http://ojs-server:8080
+    depends_on:
+      - ojs-server
+```
+
+```bash
+docker compose up -d ojs-admin-ui
+```
+
+Open [http://localhost:3000](http://localhost:3000) to see your queues, jobs, and workers in real-time.
+
+---
+
+## Step 6 — Verify via the API
+
+You can also check job status directly via curl:
+
+```bash
+# List queues and their stats
+curl http://localhost:8080/ojs/v1/queues
+
+# Get a specific job
+curl http://localhost:8080/ojs/v1/jobs/YOUR_JOB_ID
+
+# Check the server manifest (supported extensions)
+curl http://localhost:8080/ojs/manifest
+```
+
+---
+
+## Next steps
+
+Now that you have a working system, explore further:
+
+- **[Core Concepts](/getting-started/concepts/)** — Understand the 8-state job lifecycle, queues, and workers
+- **[Workflow Patterns](/tutorials/workflow-patterns/)** — Chain, group, and batch jobs together
+- **[Deployment Guide](/guides/deployment/)** — Production deployment with Helm, Terraform, and Kubernetes
+- **[HTTP API Reference](/reference/api/)** — Complete API reference with curl examples
+- **[Choose a Backend](/ecosystem/backends/)** — Compare Redis, PostgreSQL, NATS, Kafka, SQS, and more
+- **[Troubleshooting](/guides/troubleshooting/)** — Diagnose common issues
+
+### Clean up
+
+Stop and remove the Docker containers:
+
+```bash
+docker compose down -v
+```

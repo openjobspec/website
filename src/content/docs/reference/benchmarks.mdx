@@ -211,6 +211,19 @@ The OJS PostgreSQL backend uses **`SELECT ... FOR UPDATE SKIP LOCKED`** for non-
 
 PostgreSQL trades some raw throughput for **stronger durability guarantees**: jobs survive crashes, support transactional enqueue (enqueue within an application transaction), and benefit from PostgreSQL's mature replication and backup ecosystem.
 
+### OJS vs Alternatives
+
+The table below provides a high-level comparison of OJS's performance characteristics relative to other popular job processing systems. For a full feature-by-feature comparison, see the [Comparison Guide](/COMPARISON.md).
+
+| Dimension | OJS | Sidekiq | BullMQ | Celery | Temporal |
+|-----------|:---:|:-------:|:------:|:------:|:--------:|
+| **Protocol** | HTTP / gRPC | Redis protocol | Redis protocol | AMQP / Redis | gRPC |
+| **Benchmark scope** | Full HTTP round-trip | In-process | In-process | In-process | gRPC round-trip |
+| **Backends** | 7 (Redis, PG, NATS, Kafka, SQS, AMQP, Lite) | Redis only | Redis only | Redis / RabbitMQ | Temporal Server |
+| **Languages** | 9 SDKs | Ruby | Node.js | Python | 8 SDKs |
+| **Lifecycle states** | 8 | 5 | 7 | 6 | N/A |
+| **Conformance tests** | 256 (5 levels) | None | None | None | None |
+
 ### Why Direct Comparisons Are Difficult
 
 - **Protocol differences**: OJS operates over HTTP/gRPC, while many job systems use language-native drivers or custom protocols

@@ -1,0 +1,438 @@
+---
+title: Cloud Administration Guide
+description: Set up and manage OJS Cloud with multi-tenancy, RBAC, API keys, billing, and security best practices.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+OJS Cloud is a managed service layer that adds multi-tenancy, RBAC, metering, billing, and audit logging on top of any OJS backend. This guide covers setup, configuration, and day-to-day administration.
+
+For an overview of OJS Cloud features and pricing, see the [Cloud product page](/ecosystem/cloud/).
+
+## Architecture
+
+OJS Cloud runs as a gateway proxy in front of your OJS backend:
+
+```
+Client (API Key) → OJS Cloud Gateway → OJS Backend (Redis/Postgres/NATS/...)
+                        │
+                   Auth + RBAC
+                   Rate Limiting
+                   Metering
+                   Audit Logging
+```
+
+Every request is authenticated, authorized against RBAC policies, rate-limited per tenant, metered for billing, and logged for audit compliance.
+
+---
+
+## Getting started
+
+### Prerequisites
+
+- An OJS backend running and accessible (e.g., `ojs-backend-redis` on port 8080)
+- Docker or a Go 1.24+ build environment
+
+### Quick start with Docker
+
+```bash
+docker run -d \
+  --name ojs-cloud \
+  -p 8081:8081 \
+  -e OJS_CLOUD_BACKEND_URL=http://host.docker.internal:8080 \
+  -e OJS_CLOUD_ADMIN_KEY=your-admin-key-at-least-32-chars-long \
+  ghcr.io/openjobspec/ojs-cloud:latest
+```
+
+### Quick start with Docker Compose
+
+```yaml
+# docker-compose.yml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  ojs-server:
+    image: ghcr.io/openjobspec/ojs-backend-redis:latest
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+
+  ojs-cloud:
+    image: ghcr.io/openjobspec/ojs-cloud:latest
+    ports:
+      - "8081:8081"
+    environment:
+      OJS_CLOUD_BACKEND_URL: http://ojs-server:8080
+      OJS_CLOUD_ADMIN_KEY: your-admin-key-at-least-32-chars-long
+      OJS_CLOUD_TENANT_STORE: file
+      OJS_CLOUD_TENANT_STORE_PATH: /data/tenants
+    volumes:
+      - cloud-data:/data
+    depends_on:
+      - ojs-server
+
+volumes:
+  cloud-data:
+```
+
+```bash
+docker compose up -d
+```
+
+Verify it is running:
+
+```bash
+curl http://localhost:8081/ojs/v1/health
+```
+
+---
+
+## Configuration
+
+All configuration is done via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OJS_CLOUD_PORT` | `8081` | Listen port |
+| `OJS_CLOUD_BACKEND_URL` | `http://localhost:8080` | Upstream OJS backend URL |
+| `OJS_CLOUD_ADMIN_KEY` | *(required)* | Admin API key (minimum 32 characters) |
+| `OJS_CLOUD_TENANT_STORE` | `memory` | Tenant storage backend |
+| `OJS_CLOUD_TENANT_STORE_PATH` | `data/tenants` | File store path (when using `file` store) |
+| `OJS_CLOUD_RATE_LIMIT` | `true` | Enable per-tenant rate limiting |
+| `OJS_CLOUD_BILLING` | `true` | Enable metering and billing |
+
+### Tenant store backends
+
+<Tabs>
+  <TabItem label="Memory">
+    ```bash
+    OJS_CLOUD_TENANT_STORE=memory
+    ```
+    In-memory store. Data is lost on restart. Best for development and testing.
+  </TabItem>
+  <TabItem label="File">
+    ```bash
+    OJS_CLOUD_TENANT_STORE=file
+    OJS_CLOUD_TENANT_STORE_PATH=/data/tenants
+    ```
+    File-based store. Persists to disk. Good for single-node deployments.
+  </TabItem>
+  <TabItem label="PostgreSQL">
+    ```bash
+    OJS_CLOUD_TENANT_STORE=postgres
+    DATABASE_URL=postgres://user:pass@localhost:5432/ojs_cloud?sslmode=require
+    ```
+    PostgreSQL store. Best for production multi-node deployments.
+  </TabItem>
+</Tabs>
+
+---
+
+## Multi-tenancy
+
+Each tenant gets isolated access with their own API keys, rate limits, and usage tracking.
+
+### Creating a tenant
+
+```bash
+curl -X POST http://localhost:8081/admin/tenants \
+  -H "Authorization: Bearer $OJS_CLOUD_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "acme-corp",
+    "name": "Acme Corporation",
+    "plan": "pro",
+    "rate_limit": 1000,
+    "role": "developer"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "id": "acme-corp",
+  "name": "Acme Corporation",
+  "plan": "pro",
+  "api_key": "ojs_sk_generated_key_here",
+  "rate_limit": 1000,
+  "role": "developer",
+  "active": true,
+  "created_at": "2026-02-12T10:30:00Z"
+}
+```
+
+:::caution
+Save the `api_key` from the response — it is only shown once.
+:::
+
+### Listing tenants
+
+```bash
+curl http://localhost:8081/admin/tenants \
+  -H "Authorization: Bearer $OJS_CLOUD_ADMIN_KEY"
+```
+
+### Tenant ID rules
+
+- Alphanumeric characters, hyphens, and underscores only
+- Maximum 64 characters
+- Must be unique across the deployment
+
+---
+
+## RBAC and permissions
+
+OJS Cloud uses role-based access control with four built-in roles.
+
+### Roles
+
+| Role | Description |
+|------|-------------|
+| **admin** | Full access to all operations including tenant management |
+| **operator** | Read access to jobs and full queue management |
+| **developer** | Create and read jobs, manage workers |
+| **viewer** | Read-only access to jobs and queues |
+
+### Permission matrix
+
+| Permission | admin | operator | developer | viewer |
+|-----------|:-----:|:--------:|:---------:|:------:|
+| Create jobs | ✅ | ❌ | ✅ | ❌ |
+| Read jobs | ✅ | ✅ | ✅ | ✅ |
+| Cancel jobs | ✅ | ❌ | ❌ | ❌ |
+| Manage queues | ✅ | ✅ | ❌ | ❌ |
+| Manage workers | ✅ | ❌ | ✅ | ❌ |
+| Manage cron | ✅ | ❌ | ❌ | ❌ |
+| Admin operations | ✅ | ❌ | ❌ | ❌ |
+
+### Listing roles
+
+```bash
+curl http://localhost:8081/admin/roles \
+  -H "Authorization: Bearer $OJS_CLOUD_ADMIN_KEY"
+```
+
+---
+
+## API key management
+
+Each tenant can have multiple API keys for different environments or services.
+
+### Creating an API key
+
+```bash
+curl -X POST http://localhost:8081/admin/tenants/acme-corp/keys \
+  -H "Authorization: Bearer $OJS_CLOUD_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label": "production-workers",
+    "role": "developer"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "key": "ojs_sk_new_api_key_here",
+  "tenant_id": "acme-corp",
+  "role": "developer",
+  "label": "production-workers",
+  "active": true,
+  "created_at": "2026-02-12T10:30:00Z"
+}
+```
+
+### Key security
+
+- API keys are hashed with SHA-256 before storage — they cannot be recovered
+- Keys use the prefix `ojs_sk_` for easy identification
+- Always transmit keys over TLS
+- Rotate keys regularly and revoke unused ones
+
+---
+
+## Billing and usage monitoring
+
+When billing is enabled (`OJS_CLOUD_BILLING=true`), OJS Cloud meters per-tenant usage and calculates invoices based on the tenant's plan.
+
+### Pricing tiers
+
+| Plan | Monthly | Jobs/month | Queues | Workers | Backends | Retention |
+|------|---------|-----------|--------|---------|----------|-----------|
+| **Free** | $0 | 10,000 | 5 | 3 | Lite | 7 days |
+| **Starter** | $29 | 100,000 | 20 | 10 | Redis | 30 days |
+| **Pro** | $99 | 1,000,000 | 100 | 50 | Redis, Postgres | 90 days |
+| **Enterprise** | $499 | 10,000,000 | Unlimited | Unlimited | All backends | 1 year |
+
+### Viewing usage
+
+Usage is metered hourly and aggregated monthly. Access usage data through the dashboard API:
+
+```bash
+curl http://localhost:8081/admin/tenants/acme-corp/usage \
+  -H "Authorization: Bearer $OJS_CLOUD_ADMIN_KEY"
+```
+
+### Overage handling
+
+When a tenant exceeds their plan's job limit:
+- **Free/Starter** — New job enqueue requests return `429 Too Many Requests`
+- **Pro/Enterprise** — Overage is billed at the per-job rate for their tier
+
+---
+
+## Scaling and performance
+
+### Single-node deployment
+
+For small workloads (under 100K jobs/month), a single OJS Cloud instance with a file-based tenant store is sufficient.
+
+### Multi-node deployment
+
+For high availability, deploy multiple OJS Cloud instances behind a load balancer:
+
+1. Use the PostgreSQL tenant store for shared state
+2. Deploy 2+ OJS Cloud instances behind a load balancer
+3. Each instance connects to the same OJS backend
+
+```yaml
+# Kubernetes deployment example
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ojs-cloud
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ojs-cloud
+  template:
+    metadata:
+      labels:
+        app: ojs-cloud
+    spec:
+      containers:
+        - name: ojs-cloud
+          image: ghcr.io/openjobspec/ojs-cloud:latest
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OJS_CLOUD_BACKEND_URL
+              value: "http://ojs-server:8080"
+            - name: OJS_CLOUD_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ojs-cloud-secrets
+                  key: admin-key
+            - name: OJS_CLOUD_TENANT_STORE
+              value: "postgres"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ojs-cloud-secrets
+                  key: database-url
+```
+
+### Rate limiting tuning
+
+Per-tenant rate limits are enforced at the gateway level. Adjust per tenant based on their plan:
+
+| Plan | Default rate limit (req/s) |
+|------|---------------------------|
+| Free | 10 |
+| Starter | 100 |
+| Pro | 1,000 |
+| Enterprise | 10,000 |
+
+Override for a specific tenant by setting `rate_limit` when creating or updating the tenant.
+
+---
+
+## Security best practices
+
+### Authentication
+
+- **Admin key**: Use a cryptographically random string of at least 32 characters
+- **Tenant keys**: Generated automatically with SHA-256 hashing
+- **TLS**: Always terminate TLS in front of OJS Cloud (via load balancer or reverse proxy)
+
+### Headers
+
+OJS Cloud automatically adds security headers to all responses:
+
+| Header | Value |
+|--------|-------|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `X-Request-Id` | Unique per-request identifier |
+
+### Input validation
+
+- Tenant IDs: alphanumeric + hyphens/underscores, max 64 characters
+- Request body limit: 1 MB
+- Proxy timeout: 30 seconds
+
+### Audit logging
+
+All security-relevant events are logged in structured format:
+
+- Authentication attempts (success and failure)
+- Admin operations (tenant creation, key management)
+- RBAC denials
+- Rate limit violations
+
+Configure your log aggregator to monitor these events. Example log entry:
+
+```json
+{
+  "level": "warn",
+  "event": "rbac_denied",
+  "tenant_id": "acme-corp",
+  "role": "viewer",
+  "permission": "jobs:create",
+  "path": "/ojs/v1/jobs",
+  "request_id": "req_019414d4",
+  "timestamp": "2026-02-12T10:30:00Z"
+}
+```
+
+### Hardening checklist
+
+- [ ] Admin key is at least 32 characters and stored in a secrets manager
+- [ ] TLS is terminated before OJS Cloud (never expose HTTP directly)
+- [ ] Rate limiting is enabled (`OJS_CLOUD_RATE_LIMIT=true`)
+- [ ] PostgreSQL tenant store is used in production
+- [ ] Audit logs are forwarded to a central log aggregator
+- [ ] Unused tenant API keys are revoked
+- [ ] `OJS_ALLOW_INSECURE_NO_AUTH` is NOT set in production
+
+---
+
+## Admin API reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/admin/tenants` | Create a new tenant |
+| `GET` | `/admin/tenants` | List all tenants |
+| `GET` | `/admin/tenants/{id}` | Get tenant details |
+| `DELETE` | `/admin/tenants/{id}` | Delete a tenant |
+| `POST` | `/admin/tenants/{id}/keys` | Create an API key for a tenant |
+| `GET` | `/admin/tenants/{id}/usage` | Get tenant usage metrics |
+| `GET` | `/admin/roles` | List all roles and permissions |
+
+All admin endpoints require the admin key in the `Authorization: Bearer` header.
+
+---
+
+## Source code
+
+OJS Cloud source is at [`ojs-cloud/`](https://github.com/openjobspec/openjobspec/tree/main/ojs-cloud).
