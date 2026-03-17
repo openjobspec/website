@@ -134,6 +134,10 @@ export default defineConfig({
               slug: 'tutorials/your-first-job-dotnet',
             },
             {
+              label: 'Your First Job (WASM)',
+              slug: 'tutorials/your-first-job-wasm',
+            },
+            {
               label: 'Workflow Patterns',
               slug: 'tutorials/workflow-patterns',
             },

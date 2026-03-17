@@ -1,0 +1,151 @@
+---
+title: "Tutorial: Your First Job with WebAssembly"
+description: Enqueue background jobs from the browser or edge workers using the OJS WASM SDK.
+---
+
+This tutorial shows how to enqueue background jobs from a **browser** or **edge worker** (Cloudflare Workers, Deno Deploy) using the OJS WebAssembly SDK. The WASM SDK runs entirely client-side — no server-side Node.js or backend required for the enqueue path.
+
+:::note
+The WASM SDK is a **producer-only** SDK. It can enqueue jobs and query status, but does not include a worker runtime. Job processing is handled by a server-side SDK (Go, TypeScript, Python, etc.).
+:::
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- [Rust](https://rustup.rs/) 1.75 or later (for building the WASM package)
+- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) 0.12+
+- A running OJS server (see [Quickstart Step 1](/getting-started/quickstart/#step-1-start-the-ojs-server))
+
+## Step 1: Build the WASM package
+
+Clone the WASM SDK and build for the browser target:
+
+```bash
+git clone https://github.com/openjobspec/ojs-wasm-sdk.git
+cd ojs-wasm-sdk
+wasm-pack build --target web
+```
+
+This produces a `pkg/` directory with:
+- `ojs_wasm_sdk.js` — JavaScript bindings
+- `ojs_wasm_sdk_bg.wasm` — WebAssembly binary
+
+## Step 2: Enqueue a job from the browser
+
+Create a minimal HTML page that imports the WASM SDK and enqueues a job:
+
+```html
+<!DOCTYPE html>
+<html>
+<head><title>OJS WASM Demo</title></head>
+<body>
+  <h1>OJS WebAssembly Demo</h1>
+  <button id="enqueue">Enqueue Job</button>
+  <pre id="result"></pre>
+
+  <script type="module">
+    import init, { OjsClient } from './pkg/ojs_wasm_sdk.js';
+
+    await init();
+
+    const client = new OjsClient('http://localhost:8080');
+
+    document.getElementById('enqueue').addEventListener('click', async () => {
+      const result = document.getElementById('result');
+      try {
+        const job = await client.enqueue(
+          'email.send',
+          JSON.stringify({ to: 'user@example.com', template: 'welcome' })
+        );
+        result.textContent = `✅ Enqueued job: ${job}`;
+      } catch (err) {
+        result.textContent = `❌ Error: ${err}`;
+      }
+    });
+  </script>
+</body>
+</html>
+```
+
+Serve this with any static file server:
+
+```bash
+# Python
+python -m http.server 3000
+
+# Node.js
+npx serve -p 3000
+```
+
+Open `http://localhost:3000` and click **Enqueue Job**.
+
+## Step 3: Use in a Cloudflare Worker
+
+The WASM SDK also works in edge runtimes. Create a Cloudflare Worker:
+
+```javascript
+// src/index.js
+import init, { OjsClient } from '../pkg/ojs_wasm_sdk.js';
+
+export default {
+  async fetch(request, env) {
+    await init();
+
+    const client = new OjsClient(env.OJS_URL || 'https://ojs.example.com');
+
+    const url = new URL(request.url);
+    if (url.pathname === '/enqueue' && request.method === 'POST') {
+      const body = await request.json();
+
+      const job = await client.enqueue(
+        body.type || 'default',
+        JSON.stringify(body.args || {})
+      );
+
+      return new Response(job, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response('OJS Edge Worker', { status: 200 });
+  },
+};
+```
+
+## Step 4: Process jobs with a server-side worker
+
+The WASM SDK enqueues jobs, but you need a server-side worker to process them. Use any OJS SDK:
+
+```bash
+# Using the Go SDK
+cd my-worker && go run ./cmd/worker
+
+# Using the TypeScript SDK
+npx ts-node worker.ts
+
+# Using the Python SDK
+python -m myapp.worker
+```
+
+## What's next?
+
+- **Add more job types** — Register handlers for different job types in your server-side worker
+- **Monitor jobs** — Use the Admin UI at `http://localhost:8080/ojs/admin` to see job status
+- **Add workflows** — Chain multiple jobs together using the server-side SDK's workflow API
+- **Production deployment** — See the [Deployment Guide](/guides/deployment) for production configurations
+
+## Limitations
+
+The WASM SDK is designed for **edge and browser environments** where a full worker runtime isn't available:
+
+| Capability | Supported |
+|-----------|:---------:|
+| Enqueue jobs | ✅ |
+| Enqueue batch | ✅ |
+| Get job status | ✅ |
+| Cancel jobs | ✅ |
+| Process jobs (worker) | ❌ |
+| Middleware | ❌ |
+| Workflows (client-side) | ❌ |
+
+For full worker capabilities, use the [Go](/tutorials/your-first-job-go), [TypeScript](/tutorials/your-first-job-typescript), [Python](/tutorials/your-first-job-python), or [Rust](/tutorials/your-first-job-rust) SDKs.
