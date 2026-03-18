@@ -252,6 +252,24 @@ export default defineConfig({
             { label: 'Changelog', slug: 'governance/changelog' },
           ],
         },
+        {
+          label: 'Community',
+          items: [
+            { label: 'Contributors', slug: 'community/contributors' },
+          ],
+        },
+        {
+          label: '🔬 OJS Labs',
+          items: [
+            { label: 'Overview', slug: 'moonshots/index' },
+            { label: 'Verifiable Compute (M1)', slug: 'moonshots/verifiable-compute' },
+            { label: 'Agent Substrate (M2)', slug: 'moonshots/agent-substrate' },
+            { label: 'WASI Workers (M3)', slug: 'moonshots/wasi-workers' },
+            { label: 'OJS Mirror (M4)', slug: 'moonshots/mirror' },
+            { label: 'Trust Network (M5)', slug: 'moonshots/ctn' },
+            { label: 'Replay Studio (M6)', slug: 'moonshots/replay-studio' },
+          ],
+        },
       ],
     }),
   ],
