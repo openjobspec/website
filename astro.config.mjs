@@ -228,6 +228,7 @@ export default defineConfig({
         {
           label: 'Blog',
           items: [
+            { label: 'OJS v0.4.0 — SDK Hardening & OJS Labs', slug: 'blog/ojs-v0-4-0-release' },
             { label: 'Introducing Open Job Spec', slug: 'blog/introducing-open-job-spec' },
             { label: 'Why Background Jobs Need a Standard', slug: 'blog/why-background-jobs-need-a-standard' },
             { label: 'Designing the 8-State Lifecycle', slug: 'blog/designing-the-8-state-lifecycle' },

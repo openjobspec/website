@@ -1,0 +1,141 @@
+---
+title: "OJS v0.4.0 — SDK Hardening, 256-Test Conformance Suite & OJS Labs"
+description: "Open Job Spec v0.4.0 ships stronger SDK ergonomics across all 9 languages, a fully-expanded conformance suite with 256 tests across 5 levels, and the first public preview of OJS Labs."
+---
+
+We're shipping v0.4.0 today. This release is focused on making OJS more reliable to build on: stronger SDK ergonomics, a much deeper conformance suite, backend hardening, and the first public preview of OJS Labs.
+
+## What's in v0.4.0
+
+### SDK improvements (Go)
+
+The Go SDK gains several quality-of-life additions that have been in high demand:
+
+**`RegisterTyped[T]`** — register handlers with fully-typed argument structs instead of `[]any`:
+
+```go
+type SendEmailArgs struct {
+    To      string `json:"to"`
+    Subject string `json:"subject"`
+}
+
+worker.RegisterTyped("email.send", func(ctx context.Context, args SendEmailArgs) error {
+    // args.To and args.Subject are already unmarshalled
+    return sendEmail(args.To, args.Subject)
+})
+```
+
+**`NonRetryable(err)`** — signal from inside a handler that this failure should go straight to discarded, bypassing the retry policy:
+
+```go
+worker.Register("payment.charge", func(ctx context.Context, job *ojs.Job) error {
+    if err := charge(job); errors.Is(err, ErrCardDeclined) {
+        return ojs.NonRetryable(err) // don't retry — card is declined, not a transient error
+    }
+    return err
+})
+```
+
+**`ojstesting.FakeClient`** — write integration tests without a running server:
+
+```go
+func TestEnqueueAndProcess(t *testing.T) {
+    client := ojstesting.FakeClient(t)
+    // client behaves identically to a real OJSClient backed by the in-memory store
+}
+```
+
+**OpenTelemetry middleware** — opt-in tracing and metrics as a separate Go module:
+
+```go
+import "github.com/openjobspec/ojs-go-sdk/middleware/otel"
+
+worker.Use(otel.Middleware())
+```
+
+**Exponential backoff on fetch errors** — workers now back off automatically when the server is unreachable, capped at 30s, rather than hammering the endpoint.
+
+### Conformance suite — 256 tests across 5 levels
+
+The conformance suite is now the most comprehensive it has ever been. Every OJS-compliant server must pass all 256 tests to claim full conformance:
+
+| Level | Tests | What it covers |
+|-------|-------|----------------|
+| L0 — Core | 38 | Job envelope validation, basic CRUD, lifecycle transitions |
+| L1 — Reliable | 54 | Retry policies, backoff strategies, dead-letter queue |
+| L2 — Scheduled | 47 | Delayed execution, cron expressions, timezone support |
+| L3 — Workflows | 62 | DAG execution, fan-out/fan-in, unique jobs, batch ops |
+| L4 — Advanced | 55 | Middleware chains, lifecycle events, full feature validation |
+
+Plus four extension suites: admin-api, backpressure, dead-letter, rate-limiting.
+
+All 8 reference backends pass all 5 levels.
+
+### Backend hardening
+
+**Redis backend** — manifest version aligned with server OJS version; runtime confidence tests for admin placeholders, server routing, and worker directive behavior; governance files (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`).
+
+**Postgres backend** — operational parameters (pool sizes, retention periods, scheduler intervals, timeouts) are now all configurable via environment variables rather than compile-time constants.
+
+## Introducing OJS Labs
+
+OJS Labs is a new tier for forward-looking R&D that sits outside the stable release train. Labs projects follow the same quality standards — tests, linting, race detection — but are not part of the stable API contract.
+
+Seven Labs repos are published today as `v0.1.0-labs` pre-releases:
+
+| Repo | What it is |
+|------|-----------|
+| `ojs-agent` | Durable AI agent execution primitives — pause, resume, and coordinate LLM-driven workflows as first-class OJS jobs |
+| `ojs-ctn` | Container-native job runner — run any Docker image as an OJS job with isolated filesystem and resource limits |
+| `ojs-jetbrains` | JetBrains IDE plugin — queue explorer, job type IntelliSense, and run configurations for IntelliJ, GoLand, PyCharm |
+| `ojs-mirror` | Cross-backend job mirroring — replicate jobs between two OJS backends in real time for DR and migration |
+| `ojs-studio` | Browser-based job handler IDE — write, test, and deploy handlers without leaving the browser |
+| `ojs-wasi-hosts` | WASI host runtime implementations — run sandboxed job handlers compiled to WebAssembly |
+| `ojs-wit-codegen` | WIT interface code generator — generate type-safe handler stubs from WIT interface definitions |
+
+Labs code is opt-in and experimental. The API may change without notice. See [STABILITY.md](/governance/contributing/) for the full tier definition and graduation criteria.
+
+## Upgrade from v0.3.0
+
+v0.4.0 is fully backward-compatible. No breaking changes to the core spec or SDK public APIs.
+
+Update your dependency and run your conformance suite:
+
+```bash
+# Go
+go get github.com/openjobspec/ojs-go-sdk@v0.4.0
+
+# npm
+npm install @openjobspec/sdk@0.4.0
+
+# Python
+pip install "openjobspec==0.4.0"
+
+# Rust
+cargo add ojs@0.4.0
+
+# Ruby
+gem install ojs -v 0.4.0
+```
+
+For Java:
+```xml
+<dependency>
+  <groupId>org.openjobspec</groupId>
+  <artifactId>ojs-sdk</artifactId>
+  <version>0.4.0</version>
+</dependency>
+```
+
+Full changelog links for every sub-project are on the [Changelog page](/governance/changelog/).
+
+## What's next
+
+With the SDK and conformance foundations solid, v0.5.0 will focus on:
+
+- PHP and .NET SDK graduation to 1.0
+- Federation alpha (cross-datacenter job routing)
+- Labs graduation candidates (based on community adoption)
+- Real-time community (Discord or Slack)
+
+Follow progress on the [Roadmap](/governance/roadmap/) or open a discussion on [GitHub](https://github.com/openjobspec/spec/discussions).
