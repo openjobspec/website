@@ -7,7 +7,7 @@ This document outlines the planned direction for Open Job Spec. It is a living d
 
 ## Current status
 
-OJS is in **release candidate** stage (v1.0.0-rc.1). The core specification, 5 reference backends, 6 SDKs, CLI, Admin UI, and Playground are feature-complete and passing all conformance levels.
+**v0.4.0** is the current stable release (2026-04-20). The core specification, 8 reference backends, 9 official SDKs, CLI, Admin UI, Playground, and VS Code extension are feature-complete and passing all 5 conformance levels (256 tests). Seven Labs repos are published as `v0.1.0-labs` pre-releases.
 
 ## v0.1.0 — First public release
 
@@ -39,6 +39,19 @@ OJS is in **release candidate** stage (v1.0.0-rc.1). The core specification, 5 r
 - Framework contrib packages stabilized (v1.0)
 - Migration guides from Sidekiq, BullMQ, Celery (CLI + docs)
 - Kubernetes operator stabilized (beta)
+
+## v0.4.0 — SDK hardening & conformance depth ✅ Released 2026-04-20
+
+**Goal:** Strengthen SDK reliability, deepen the conformance suite, and expand backend coverage.
+
+- `NonRetryable(err)` error wrapper and `RegisterTyped[T]` generic handler in Go SDK
+- OpenTelemetry tracing middleware (`middleware/otel`) as opt-in Go subpackage
+- `ojstesting.FakeClient` for in-process integration tests without a live server
+- Exponential backoff on consecutive worker fetch errors (capped at 30s)
+- Conformance suite expanded to 256 tests across 5 levels (L0–L4) plus extension suites
+- Configurable operational parameters in Postgres backend via environment variables
+- Structured runtime confidence tests in Redis backend
+- Seven OJS Labs repos initialized and tagged `v0.1.0-labs`: `ojs-agent`, `ojs-ctn`, `ojs-jetbrains`, `ojs-mirror`, `ojs-studio`, `ojs-wasi-hosts`, `ojs-wit-codegen`
 
 ## Future directions
 
